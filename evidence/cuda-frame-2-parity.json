@@ -31,8 +31,8 @@
   "prepass_fixture_sha256": "d7333bf59340e5bb679f88a2064cd1fb8c203e80535b6fcf91b4e3eb9796e49e",
   "gate_checks_passed": 12,
   "gate_checks_total": 12,
-  "source_manifest_sha256": "569225f9eb5152b5bc6e5961796609a6bda9b8db67c94247ef54e04b9d64246b",
-  "canonical_private_receipt_sha256": "a538c03549b67e6843dc5770c6dff0a4a5964591945e5b6596a4e08f04e06c57",
+  "source_manifest_sha256": "9d2953a7cfb3979ae0b6c5347c66356763f23dcd9515a390b5d9e18c793df526",
+  "canonical_private_receipt_sha256": "b5b842f34ebd5b91a4bf12a7c125c3696739674bd9a72c437deaeca61fc679a7",
   "cuda_runtime": {
     "gpu": "NVIDIA RTX A4000",
     "compute_capability": "8.6",
@@ -46,7 +46,7 @@
     "python": "3.12.3",
     "numpy": "2.5.1",
     "container": "nvidia/cuda:12.6.3-devel-ubuntu24.04 (Docker, NVIDIA runtime)",
-    "elapsed_seconds": 23.549
+    "elapsed_seconds": 23.388
   },
   "cpu_reference_runtime": {
     "machine": "arm64",

@@ -18,6 +18,7 @@ import numpy.typing as npt
 from .contracts import AcquisitionEpoch, DualRGBIAcquisition, RGBI16Frame
 from .engine import (
     CancellationCallback,
+    ProcessingDiagnostics,
     ProcessingResult,
     ProgressCallback,
     process_cpu,
@@ -142,6 +143,7 @@ def process(
     output_rgb16: npt.NDArray[np.uint16] | None = None,
     progress: ProgressCallback | None = None,
     cancelled: CancellationCallback | None = None,
+    export_diagnostics: bool = False,
 ) -> BackendProcessingResult:
     """Process one job on the requested backend with fail-closed semantics."""
 
@@ -153,7 +155,11 @@ def process(
     requested = ComputeBackend(backend)
     if requested is ComputeBackend.CPU:
         result = process_cpu(
-            job, output_rgb16=output_rgb16, progress=progress, cancelled=cancelled
+            job,
+            output_rgb16=output_rgb16,
+            progress=progress,
+            cancelled=cancelled,
+            export_diagnostics=export_diagnostics,
         )
         return BackendProcessingResult(
             result,
@@ -165,7 +171,11 @@ def process(
         from .cuda_backend import process_cuda
 
         result = process_cuda(
-            job, output_rgb16=output_rgb16, progress=progress, cancelled=cancelled
+            job,
+            output_rgb16=output_rgb16,
+            progress=progress,
+            cancelled=cancelled,
+            export_diagnostics=export_diagnostics,
         )
         return BackendProcessingResult(
             result,
@@ -179,7 +189,11 @@ def process(
         cuda_self_test()
     except Exception as error:
         result = process_cpu(
-            job, output_rgb16=output_rgb16, progress=progress, cancelled=cancelled
+            job,
+            output_rgb16=output_rgb16,
+            progress=progress,
+            cancelled=cancelled,
+            export_diagnostics=export_diagnostics,
         )
         return BackendProcessingResult(
             result,
@@ -192,7 +206,11 @@ def process(
     from .cuda_backend import process_cuda
 
     result = process_cuda(
-        job, output_rgb16=output_rgb16, progress=progress, cancelled=cancelled
+        job,
+        output_rgb16=output_rgb16,
+        progress=progress,
+        cancelled=cancelled,
+        export_diagnostics=export_diagnostics,
     )
     return BackendProcessingResult(
         result,
@@ -206,6 +224,7 @@ __all__ = [
     "BackendProcessingResult",
     "BackendSelection",
     "ComputeBackend",
+    "ProcessingDiagnostics",
     "cuda_self_test",
     "process",
 ]

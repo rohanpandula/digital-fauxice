@@ -39,7 +39,7 @@ from ..streaming import (
     _RowCache,
     _startup_replay,
 )
-from ..output import InverseResponseFactors
+from ..output import InverseResponseFactors, emit_public_rgb16
 from ..x3a import (
     AuxiliaryParameters,
     DecisionParameters,
@@ -190,6 +190,9 @@ def run_streaming_replay_cuda(
     progress: ProgressCallback | None = None,
     cancelled: Callable[[], bool] | None = None,
     stage_timings: dict | None = None,
+    _diagnostic_score_plane: npt.NDArray[np.float32] | None = None,
+    _diagnostic_at_floor_mask: npt.NDArray[np.bool_] | None = None,
+    _diagnostic_changed_mask: npt.NDArray[np.bool_] | None = None,
 ) -> StreamingReplayResult:
     """Byte-exact CUDA mirror of :func:`..streaming.run_streaming_replay`."""
 
@@ -508,6 +511,38 @@ def run_streaming_replay_cuda(
     counters = cp.asnumpy(gpu_counters)
     advances = int(cp.asnumpy(gpu_advances)[0])
     final_state = int(cp.asnumpy(gpu_state_out)[0])
+
+    if _diagnostic_score_plane is not None:
+        if (
+            _diagnostic_at_floor_mask is None
+            or _diagnostic_changed_mask is None
+        ):
+            raise ValueError("all CUDA diagnostic buffers must be provided")
+        with timer.cpu("download.diagnostics"):
+            gpu_score.get(out=_diagnostic_score_plane)
+            np.equal(
+                _diagnostic_score_plane,
+                np.float32(score_parameters.floor),
+                out=_diagnostic_at_floor_mask,
+            )
+            bytes_per_working_row = width * 4 * np.dtype(np.float32).itemsize
+            rows_per_chunk = max(
+                1,
+                min(height, (8 << 20) // bytes_per_working_row),
+            )
+            for row_start in range(0, height, rows_per_chunk):
+                row_stop = min(height, row_start + rows_per_chunk)
+                working_chunk = gpu_working[row_start:row_stop].get()
+                noop_chunk = emit_public_rgb16(
+                    working_chunk[:, :, :3],
+                    factors=factors,
+                )
+                np.any(
+                    host_out[row_start:row_stop] != noop_chunk,
+                    axis=2,
+                    out=_diagnostic_changed_mask[row_start:row_stop],
+                )
+                _check_cancelled()
 
     output[:] = host_out
     with timer.cpu("host.sha256"):
