@@ -125,8 +125,16 @@ def _startup_replay_fast(
     auxiliary = np.ascontiguousarray(auxiliary_all[:available])
     score = np.ascontiguousarray(score_all[:available])
     rgb, auxiliary, score = _validate_planes(rgb, auxiliary, score)
+    # The reference path surfaces this geometry as an IndexError while
+    # stacking the fifth row; the public profile floor (5 rows, 8 columns)
+    # excludes it either way.  Keep the clean message here.
     if cross_neighbor and rgb.shape[0] < 5:
         raise ValueError("cross-neighbor startup requires the first five real rows")
+    # The first two cross-neighbor stages write width-4 columns; below four
+    # columns that count would go negative (the reference fails allocating a
+    # negative-dimension array).  Same failure class, clean message.
+    if cross_neighbor and width < 4:
+        raise ValueError("cross-neighbor startup requires at least four columns")
     floor = np.float32(score_parameters.floor)
     if not np.isfinite(floor) or floor <= np.float32(0.0):
         raise ValueError("startup score floor must be finite and positive")
