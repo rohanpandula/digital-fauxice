@@ -390,6 +390,26 @@ def run_streaming_replay_fast(
     high64 = float(np.float32(dither_bounds.high))
     low_lt_high = low64 < high64
 
+    # Fail closed once per replay on non-finite replay-constant parameters,
+    # mirroring the reference's per-call checks (conditional_dither_delta and
+    # the ReconstructionParameters validation).  The kernels deliberately add
+    # no per-pixel finiteness checks beyond the reference's writer validity
+    # rule for the combined candidate.
+    if not (
+        np.isfinite(low64)
+        and np.isfinite(high64)
+        and np.all(np.isfinite(dither_scales))
+    ):
+        raise ValueError("dither inputs must be finite")
+    if not (
+        np.all(np.isfinite(coarse_slopes))
+        and np.all(np.isfinite(band_scales))
+        and np.all(np.isfinite(factors_a))
+        and np.all(np.isfinite(factors_b))
+        and np.all(np.isfinite(configured_strengths))
+    ):
+        raise ValueError("reconstruction parameters must be finite")
+
     startup = _startup_replay_fast(
         kernels,
         working_all=working_all,
