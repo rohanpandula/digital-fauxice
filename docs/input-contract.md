@@ -1,6 +1,6 @@
 # Input contract
 
-Portable Digital ICE consumes two RGBI acquisitions of the same physical film
+Digital Fauxice consumes two RGBI acquisitions of the same physical film
 frame.
 
 ## Required captures
