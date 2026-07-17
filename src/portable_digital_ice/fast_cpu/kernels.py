@@ -242,12 +242,16 @@ def automatic_strengths_scalar(weights, cfg0, cfg1, cfg2):
     strengths = np.empty(3, dtype=np.float64)
 
     if cfg0 == np.float32(0.0):
-        doubled = np.float32(2.0 * np.float64(weights[1]))
-        clamped = np.float64(doubled)
-        if clamped < 0.0:
-            clamped = 0.0
-        if clamped > 1.0:
-            clamped = 1.0
+        doubled = np.float64(np.float32(2.0 * np.float64(weights[1])))
+        # The reference clamps with min(1.0, max(0.0, x)) and the literal
+        # first: a NaN loses both comparisons and collapses to 0.0.  A naive
+        # two-sided if-clamp would instead pass NaN through.
+        lower_clamped = 0.0
+        if doubled > 0.0:
+            lower_clamped = doubled
+        clamped = 1.0
+        if lower_clamped < 1.0:
+            clamped = lower_clamped
         strengths[0] = np.float64(np.float32(clamped))
     else:
         strengths[0] = np.float64(cfg0)

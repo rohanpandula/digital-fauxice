@@ -298,7 +298,48 @@ def test_score_expression_bitexact() -> None:
 
 
 # --------------------------------------------------------------------------
-# 5: contraction canary. Find triples where FMA changes a*b+c and prove njit
+# 5: automatic strengths must match the reference clamp semantics exactly,
+# including the NaN-collapsing min(1.0, max(0.0, x)) literal-first order.
+# --------------------------------------------------------------------------
+
+
+def test_automatic_strengths_matches_reference_including_nan() -> None:
+    """kernels.automatic_strengths_scalar vs reconstruction._automatic_strengths.
+
+    NaN weights are unreachable through the validated pipeline (the combiner
+    rejects non-finite inputs first), but the helper itself must still be a
+    bit-exact twin: the reference's ``min(1.0, max(0.0, x))`` collapses a NaN
+    doubled W21 to 0.0, while the other two lanes propagate NaN.
+    """
+
+    from portable_digital_ice.fast_cpu import kernels
+    from portable_digital_ice.reconstruction import _automatic_strengths
+
+    rng = np.random.default_rng(20260724)
+    cases = [
+        np.array([0.5, 0.25, -0.125, 0.75], dtype=np.float32),
+        np.array([0.5, 0.75, 0.5, 1.25], dtype=np.float32),
+        np.array([0.5, -0.25, 0.0, 0.0], dtype=np.float32),
+    ]
+    for _ in range(50):
+        cases.append((rng.random(4, dtype=np.float32) * 2.0 - 0.5).astype(np.float32))
+    for lane in (1, 2, 3):
+        poisoned = np.array([0.5, 0.25, -0.125, 0.75], dtype=np.float32)
+        poisoned[lane] = np.float32(np.nan)
+        cases.append(poisoned)
+
+    zero = np.float32(0.0)
+    for index, weights in enumerate(cases):
+        _, expected = _automatic_strengths(weights, (0.0, 0.0, 0.0))
+        actual = kernels.automatic_strengths_scalar(weights, zero, zero, zero)
+        assert np.array_equal(
+            np.asarray(expected).view(np.uint64),
+            np.asarray(actual).view(np.uint64),
+        ), f"case {index}: expected={expected!r} actual={actual!r}"
+
+
+# --------------------------------------------------------------------------
+# 6: contraction canary. Find triples where FMA changes a*b+c and prove njit
 # does not silently fuse under default @njit (no fastmath).
 # --------------------------------------------------------------------------
 
