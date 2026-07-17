@@ -407,6 +407,39 @@ def test_diagnostics_planes_match_cpu() -> None:
     _assert_job_parity(main, prepass, "diagnostics-check", export_diagnostics=True)
 
 
+def test_thread_count_determinism() -> None:
+    """Outputs, digests, and counters are byte-equal for every thread count.
+
+    The analysis phase parallelizes over rows with disjoint writes and zero
+    reductions, so results must not depend on the numba thread count or
+    schedule.  The writer stays strictly serial.
+    """
+
+    from numba import get_num_threads, set_num_threads
+
+    rng = np.random.default_rng(20260723)
+    height, width = 40, 56
+    main = rng.integers(18000, 62000, size=(height, width, 4), dtype=np.uint16)
+    main[10:20, 14:34, 3] = rng.integers(200, 2500, size=(10, 20), dtype=np.uint16)
+    main[0:2, 0:6, 3] = 500
+    main[-2:, -6:, 3] = 700
+    job = _job(main, _prepass(rng), "thread-determinism")
+    cpu = process_cpu(_job(main, _prepass(rng), "thread-determinism"))
+
+    default_threads = get_num_threads()
+    thread_counts = sorted({1, min(3, default_threads), default_threads})
+    try:
+        for count in thread_counts:
+            set_num_threads(count)
+            fast = process_cpu_fast(job)
+            assert fast.replay == cpu.replay, f"threads={count}"
+            assert np.array_equal(fast.output_rgb16, cpu.output_rgb16), (
+                f"threads={count}"
+            )
+    finally:
+        set_num_threads(default_threads)
+
+
 def test_cancellation_leaves_output_untouched() -> None:
     """A cancelled fast run must not mutate the caller-owned output buffer."""
 

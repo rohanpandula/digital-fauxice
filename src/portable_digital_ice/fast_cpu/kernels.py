@@ -17,7 +17,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from numba import njit
+from numba import njit, prange
 
 from ..rng import LCG24_MASK, NIKON_NORMALIZATION
 
@@ -840,7 +840,7 @@ def compute_row_eligibility(
 
 
 @njit(cache=True)
-def process_row(
+def analyze_row(
     auxiliary_all,
     score_all,
     weighted_auxiliary_all,
@@ -864,24 +864,18 @@ def process_row(
     factors_a,
     factors_b,
     configured_strengths,
-    low64,
-    high64,
-    low_lt_high,
-    dither_scales,
-    state,
+    out_attempted_row,
+    out_candidates_row,
 ):
-    """One entire output row: eligibility, then the fused per-pixel chain.
+    """The RNG-free analysis for one output row.
 
-    ``record_count`` is 1 (CENTER_ONLY) or 5 (CROSS_NEIGHBOR, gathering the
-    four adjacent feature records too).  Returns
-    ``(working_output_row, attempted, written, rng_advances, new_state)``.
+    Eligibility, feature records, the driver gate, candidates, and the
+    combiner -- everything up to (and excluding) the sequential writer.
+    ``record_count`` is 1 (CENTER_ONLY) or 5 (CROSS_NEIGHBOR).  Attempted
+    pixels get their combined float64 candidate stored in
+    ``out_candidates_row`` and a flag in ``out_attempted_row``; both arrays
+    are fully rewritten for every x.  Returns the attempted count.
     """
-
-    working_output = np.empty((width, 3), dtype=np.float32)
-    for x in range(width):
-        working_output[x, 0] = working_all[y, x, 0]
-        working_output[x, 1] = working_all[y, x, 1]
-        working_output[x, 2] = working_all[y, x, 2]
 
     eligible = np.empty(width, dtype=np.uint8)
     compute_row_eligibility(
@@ -899,8 +893,6 @@ def process_row(
     )
 
     attempted = 0
-    written = 0
-    advances_total = np.int64(0)
 
     score_patch = np.empty((9, 9), dtype=np.float32)
     waux_patch = np.empty((9, 9), dtype=np.float32)
@@ -910,6 +902,7 @@ def process_row(
     original_rgb = np.empty(3, dtype=np.float32)
 
     for x in range(width):
+        out_attempted_row[x] = 0
         if eligible[x] == 0:
             continue
 
@@ -1050,19 +1043,146 @@ def process_row(
             factors_b,
             configured_strengths,
         )
-        values, advances, state = write_pixel_scalar(
-            combined, original_rgb, floor_enabled, low64, high64, low_lt_high, dither_scales, state
+        out_candidates_row[x, 0] = combined[0]
+        out_candidates_row[x, 1] = combined[1]
+        out_candidates_row[x, 2] = combined[2]
+        out_attempted_row[x] = 1
+
+    return attempted
+
+
+@njit(cache=True, parallel=True)
+def analyze_band(
+    auxiliary_all,
+    score_all,
+    weighted_auxiliary_all,
+    weighted_rgb_all,
+    working_all,
+    y0,
+    band_rows,
+    height,
+    width,
+    score_floor,
+    decision_threshold,
+    decision_radius,
+    decision_count_limit,
+    floor_enabled_rows,
+    row_reconstruction_gates,
+    fallback_values,
+    record_count,
+    coarse_enabled,
+    coarse_slopes,
+    band_enabled,
+    band_scales,
+    factors_a,
+    factors_b,
+    configured_strengths,
+    out_attempted,
+    out_candidates,
+    out_attempted_counts,
+):
+    """Analyze rows ``y0 .. y0+band_rows-1`` in parallel.
+
+    Each prange iteration is one whole row: a pure function of the read-only
+    planes and per-row scalars, writing only to that row's disjoint slots of
+    the band buffers.  No reductions, no shared mutable state -- results are
+    byte-identical for every thread count and schedule.
+    """
+
+    for i in prange(band_rows):
+        y = y0 + i
+        out_attempted_counts[i] = analyze_row(
+            auxiliary_all,
+            score_all,
+            weighted_auxiliary_all,
+            weighted_rgb_all,
+            working_all,
+            y,
+            height,
+            width,
+            score_floor,
+            decision_threshold,
+            decision_radius,
+            decision_count_limit,
+            floor_enabled_rows[y] != 0,
+            row_reconstruction_gates[y],
+            fallback_values[y],
+            record_count,
+            coarse_enabled,
+            coarse_slopes,
+            band_enabled,
+            band_scales,
+            factors_a,
+            factors_b,
+            configured_strengths,
+            out_attempted[i],
+            out_candidates[i],
         )
 
-        working_output[x, 0] = values[0]
-        working_output[x, 1] = values[1]
-        working_output[x, 2] = values[2]
-        advances_total += advances
-        if (
-            values[0] != original_rgb[0]
-            or values[1] != original_rgb[1]
-            or values[2] != original_rgb[2]
-        ):
-            written += 1
 
-    return working_output, attempted, written, advances_total, state
+@njit(cache=True)
+def write_band(
+    out_attempted,
+    out_candidates,
+    working_all,
+    y0,
+    band_rows,
+    width,
+    floor_enabled_rows,
+    low64,
+    high64,
+    low_lt_high,
+    dither_scales,
+    state,
+    out_values,
+    out_written,
+    out_advances,
+):
+    """The strictly serial writer for one analyzed band.
+
+    Walks attempted pixels in row-major order, threading the 24-bit LCG
+    state through every conditional draw exactly as the reference writer
+    does.  Fills ``out_values`` with each row's final float32 working
+    output (originals for non-attempted pixels) plus per-row written and
+    RNG-advance counts.  Returns the updated state.
+    """
+
+    original_rgb = np.empty(3, dtype=np.float32)
+    for i in range(band_rows):
+        y = y0 + i
+        floor_enabled = floor_enabled_rows[y] != 0
+        written = 0
+        advances_total = np.int64(0)
+        for x in range(width):
+            out_values[i, x, 0] = working_all[y, x, 0]
+            out_values[i, x, 1] = working_all[y, x, 1]
+            out_values[i, x, 2] = working_all[y, x, 2]
+        for x in range(width):
+            if out_attempted[i, x] == 0:
+                continue
+            original_rgb[0] = working_all[y, x, 0]
+            original_rgb[1] = working_all[y, x, 1]
+            original_rgb[2] = working_all[y, x, 2]
+            values, advances, state = write_pixel_scalar(
+                out_candidates[i, x],
+                original_rgb,
+                floor_enabled,
+                low64,
+                high64,
+                low_lt_high,
+                dither_scales,
+                state,
+            )
+            out_values[i, x, 0] = values[0]
+            out_values[i, x, 1] = values[1]
+            out_values[i, x, 2] = values[2]
+            advances_total += advances
+            if (
+                values[0] != original_rgb[0]
+                or values[1] != original_rgb[1]
+                or values[2] != original_rgb[2]
+            ):
+                written += 1
+        out_written[i] = written
+        out_advances[i] = advances_total
+    return state

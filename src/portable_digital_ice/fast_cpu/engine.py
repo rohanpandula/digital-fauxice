@@ -79,6 +79,11 @@ def _kernels():
 RowProgressCallback = Callable[[int, int, int, int], None]
 ProgressCallback = Callable[[object], None]
 
+# Rows analyzed per parallel band.  Bounds the candidate buffers (a band of
+# 128 rows at width 3946 holds ~12 MB of float64 candidates) while giving the
+# analysis prange enough rows to occupy every thread.
+_BAND_ROWS = 128
+
 
 def _startup_replay_fast(
     kernels,
@@ -379,23 +384,37 @@ def run_streaming_replay_fast(
     output_hash = hashlib.sha256()
     state = int(active_generator.state)
 
-    for y in range(height):
-        working_output, row_attempted, row_written, row_advances, state = kernels.process_row(
+    # Band buffers, reused across bands.  The analysis phase runs one prange
+    # over the band's rows (disjoint writes, zero reductions -- byte-equal
+    # for every thread count); the writer then consumes the band strictly in
+    # row-major order, threading the LCG state.
+    band_rows_capacity = min(height, _BAND_ROWS)
+    band_attempted = np.empty((band_rows_capacity, width), dtype=np.uint8)
+    band_candidates = np.empty((band_rows_capacity, width, 3), dtype=np.float64)
+    band_attempted_counts = np.empty(band_rows_capacity, dtype=np.int64)
+    band_values = np.empty((band_rows_capacity, width, 3), dtype=np.float32)
+    band_written = np.empty(band_rows_capacity, dtype=np.int64)
+    band_advances = np.empty(band_rows_capacity, dtype=np.int64)
+
+    for y0 in range(0, height, band_rows_capacity):
+        band_rows = min(band_rows_capacity, height - y0)
+        kernels.analyze_band(
             auxiliary_all,
             score_all,
             weighted_auxiliary_all,
             weighted_rgb_all,
             working_all,
-            y,
+            y0,
+            band_rows,
             height,
             width,
             score_floor,
             decision_threshold,
             decision_radius,
             decision_count_limit,
-            bool(floor_enabled_rows[y]),
-            int(row_reconstruction_gates[y]),
-            fallback_values[y],
+            floor_enabled_rows,
+            row_reconstruction_gates,
+            fallback_values,
             record_count,
             coarse_enabled,
             coarse_slopes,
@@ -404,25 +423,41 @@ def run_streaming_replay_fast(
             factors_a,
             factors_b,
             configured_strengths,
+            band_attempted,
+            band_candidates,
+            band_attempted_counts,
+        )
+        state = kernels.write_band(
+            band_attempted,
+            band_candidates,
+            working_all,
+            y0,
+            band_rows,
+            width,
+            floor_enabled_rows,
             low64,
             high64,
             low_lt_high,
             dither_scales,
             state,
+            band_values,
+            band_written,
+            band_advances,
         )
-        attempted += int(row_attempted)
-        written += int(row_written)
-        public_advances += int(row_advances)
-
-        noop = noop_all[y]
-        rendered = emit_public_rgb16(working_output[np.newaxis, :, :])[0]
-        output[y] = rendered
-        output_hash.update(rendered.astype("<u2", copy=False).tobytes(order="C"))
-        changed += int(np.count_nonzero(np.any(rendered != noop, axis=1)))
-        if diagnostics_row is not None:
-            diagnostics_row(y, score_all[y], score_floor, rendered, noop)
-        if progress is not None:
-            progress(y + 1, height, attempted, written)
+        for i in range(band_rows):
+            y = y0 + i
+            attempted += int(band_attempted_counts[i])
+            written += int(band_written[i])
+            public_advances += int(band_advances[i])
+            noop = noop_all[y]
+            rendered = emit_public_rgb16(band_values[i][np.newaxis, :, :])[0]
+            output[y] = rendered
+            output_hash.update(rendered.astype("<u2", copy=False).tobytes(order="C"))
+            changed += int(np.count_nonzero(np.any(rendered != noop, axis=1)))
+            if diagnostics_row is not None:
+                diagnostics_row(y, score_all[y], score_floor, rendered, noop)
+            if progress is not None:
+                progress(y + 1, height, attempted, written)
 
     active_generator.state = state
     return StreamingReplayResult(
