@@ -193,6 +193,44 @@ def test_cpu_fast_self_test_outcome_is_cached(monkeypatch):
         assert calls["n"] == 1
 
 
+def test_cpu_fast_parity_comparison_catches_tampered_results(monkeypatch):
+    """The shared parity check must flag sample and diagnostics mismatches."""
+
+    if not _numba_present():
+        pytest.skip("numba is unavailable")
+    from dataclasses import replace as dataclass_replace
+
+    from portable_digital_ice import fast_cpu
+    from portable_digital_ice.fast_cpu import CpuFastUnavailable
+
+    real_process_cpu_fast = fast_cpu.process_cpu_fast
+
+    def tampered(*args, **kwargs):
+        result = real_process_cpu_fast(*args, **kwargs)
+        wrong_output = result.output_rgb16.copy()
+        wrong_output[0, 0, 0] ^= 1
+        assert result.diagnostics is not None
+        wrong_mask = result.diagnostics.at_floor_mask.copy()
+        wrong_mask[0, 0] = not wrong_mask[0, 0]
+        wrong_diagnostics = dataclass_replace(
+            result.diagnostics, at_floor_mask=wrong_mask
+        )
+        return dataclass_replace(
+            result, output_rgb16=wrong_output, diagnostics=wrong_diagnostics
+        )
+
+    with _self_test_cache_snapshot() as cache:
+        cache.pop("cpu-fast-outcome", None)
+        monkeypatch.setattr(
+            "portable_digital_ice.fast_cpu.process_cpu_fast", tampered
+        )
+        with pytest.raises(CpuFastUnavailable) as caught:
+            backend_module.cpu_fast_self_test()
+        assert "failed parity" in str(caught.value)
+        assert "output sample mismatch" in str(caught.value)
+        assert "at-floor mask mismatch" in str(caught.value)
+
+
 def test_cpu_fast_failure_is_cached_and_fails_closed(monkeypatch):
     from portable_digital_ice.fast_cpu import CpuFastUnavailable
 
