@@ -42,8 +42,10 @@ image happens to agree.
 
 The pure Python and NumPy reference takes roughly an hour per frame. It is
 deliberately a conservative research implementation. The optional CUDA backend
-produces byte-identical output in about 21 seconds on an NVIDIA RTX A4000, and
-it fails closed rather than run in any configuration it cannot verify.
+produces byte-identical output in about 21 seconds on an NVIDIA RTX A4000, an
+optional compiled CPU backend does the same in about ten seconds on an Apple
+M4, and both fail closed rather than run in any configuration they cannot
+verify.
 
 ## Optional AI repair for the worst damage
 
@@ -202,16 +204,26 @@ resolution metrics, or every possible film and defect distribution.
 ### Backends
 
 The checked-in CPU path is the exact reference. An optional deterministic
-CUDA backend ships behind `ComputeBackend.AUTO | CPU | CUDA`, validated by
-binding receipts on both complete native 4000 dpi frames: identical RGB16
-output to this package's CPU reference, compared sample by sample
-(68,447,316 values per frame, zero mismatches), with identical changed-pixel
-accounting, RNG advance counts, final RNG states, startup receipts, and the
-full synthetic adversarial suite. Both receipts bind the same fresh source
-manifest of this tree. `cuda` fails closed with a specific reason when
-unusable; `auto` selects CUDA only after a startup self-test passes byte
-parity. See [`docs/cuda-backend.md`](docs/cuda-backend.md) and the receipts
-under [`evidence/`](evidence/).
+CUDA backend ships behind `ComputeBackend.AUTO | CPU | CPU_FAST | CUDA`,
+validated by binding receipts on both complete native 4000 dpi frames:
+identical RGB16 output to this package's CPU reference, compared sample by
+sample (68,447,316 values per frame, zero mismatches), with identical
+changed-pixel accounting, RNG advance counts, final RNG states, startup
+receipts, and the full synthetic adversarial suite. Both receipts bind the
+same fresh source manifest of this tree. `cuda` fails closed with a specific
+reason when unusable; `auto` selects CUDA only after a startup self-test
+passes byte parity. See [`docs/cuda-backend.md`](docs/cuda-backend.md) and
+the receipts under [`evidence/`](evidence/).
+
+An optional compiled CPU backend (`cpu-fast`, optional extra
+`pip install 'portable-digital-ice[fast]'`) holds the same receipt-backed
+claim: byte-identical output, counters, RNG accounting, and diagnostics
+planes on both complete validation frames, deterministic across thread
+counts and repeated runs, in about 9.5 seconds per frame on an Apple M4
+against roughly an hour for the reference. It fails closed with a specific
+reason when numba is unavailable or its startup self-test cannot prove byte
+parity, and `auto` prefers CUDA, then cpu-fast, then the exact CPU
+reference. See [`docs/cpu-fast-backend.md`](docs/cpu-fast-backend.md).
 
 A Metal backend for Apple Silicon remains planned under the same rule:
 availability and speed are not parity evidence, and no backend is labeled
@@ -268,6 +280,7 @@ policy, gates, and validation rules live in
 | `docs/validation.md` | Exact gates, receipt semantics, and limits |
 | `docs/input-contract.md` | Dual-RGBI acquisition and API requirements |
 | `docs/cuda-backend.md` | Deterministic CUDA backend and its binding receipts |
+| `docs/cpu-fast-backend.md` | Compiled CPU backend and its binding receipts |
 | `docs/hybrid-repair-agent-prompt.md` | Policy, gates, and validation rules for the optional hybrid mode |
 
 ## License and names
