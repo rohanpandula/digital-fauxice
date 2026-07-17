@@ -96,9 +96,10 @@ The compiled path materializes whole-image analysis planes instead of the
 reference's eleven-row streaming window, so peak host memory is about 2 GB
 at the supported full-frame geometry (the reference stays memory-bounded by
 image width). Progress callbacks still fire per row with exact cumulative
-totals; cancellation is honored at band boundaries (128 rows) rather than
-after every row, and can never corrupt partial output because the caller's
-buffer is written only once, after all work completes.
+totals; cooperative cancellation is honored per row while the analysis
+planes are prepared and per band (128 rows) during writing, and can never
+corrupt partial output because the caller's buffer is written only once,
+after all work completes.
 
 The parity evidence is from the arm64 host above. The response-LUT and
 factor-table hash checks fail closed on any platform whose libm produces

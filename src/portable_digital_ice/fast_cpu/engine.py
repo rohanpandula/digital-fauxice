@@ -3,11 +3,12 @@
 The reconstruction math ported here is byte-identical to the CPU reference in
 ``streaming.py`` and ``reconstruction.py``.  Row cache products (response
 lookup, auxiliary/score/weighted planes, per-row stage-parameter resolution)
-stay in Python via the reference's own ``_RowCache``; the entire per-row loop
--- decision eligibility, history-window boundary handling, feature records,
-candidates, combiner, and writer -- runs as one fused njit call per row.
-Emit, digest, callbacks, and cancellation stay per-row in Python so behavior
-outside the compiled chain is unchanged.
+stay in Python via the reference's own ``_RowCache``; decision eligibility,
+history-window boundary handling, feature records, candidates, and the
+combiner run as one parallel kernel call per band of rows, followed by the
+strictly serial writer.  Emit, digest, and callbacks stay per-row in Python;
+cooperative cancellation is honored per row while the analysis planes are
+prepared and per band during writing.
 
 Importing this module never requires numba.  Only calling into the compiled
 kernels does, and that failure is raised as :class:`CpuFastUnavailable` with a
@@ -233,18 +234,22 @@ def run_streaming_replay_fast(
     stage_parameter_provider: StageParameterProvider | None = None,
     progress: RowProgressCallback | None = None,
     diagnostics_row: DiagnosticsRowCallback | None = None,
+    cancelled: CancellationCallback | None = None,
 ) -> StreamingReplayResult:
     """Byte-exact compiled mirror of ``streaming.run_streaming_replay``.
 
     Row cache products (response lookup, auxiliary/score/weighted planes via
     ``_RowCache.get``, which resolves per-row stage-parameter swaps exactly
     as the reference does) stay identical Python/NumPy and are materialized
-    once into whole-image planes.  The entire per-row loop -- eligibility,
-    history-window boundary handling, feature records, candidates, combiner,
-    and writer -- runs as one fused njit call per row
-    (``kernels.process_row``), so this is O(1) kernel invocations per row
-    instead of one per selected pixel.  Emit, digest, callbacks, and
-    cancellation stay per-row in Python.
+    once into whole-image planes, with the cooperative ``cancelled``
+    callback honored per row during that preparation.  Analysis then runs as
+    one parallel kernel call per band of rows (``kernels.analyze_band``)
+    followed by the strictly serial writer (``kernels.write_band``); emit,
+    digest, and callbacks stay per-row in Python, so cancellation during
+    writing is honored at band granularity (via the progress callback, as in
+    the reference engine).  ``process_cpu_fast`` commits the caller-owned
+    output only after successful completion, so a cancelled run leaves that
+    buffer untouched.
     """
 
     kernels = _kernels()
@@ -288,6 +293,7 @@ def run_streaming_replay_fast(
     weighted_rgb_all = np.empty((height, width, 3), dtype=np.float32)
     noop_all = np.empty((height, width, 3), dtype=np.uint16)
     for row in range(height):
+        _check_cancelled(cancelled)
         analyzed = cache.get(row)
         working_all[row] = analyzed.working
         auxiliary_all[row] = analyzed.auxiliary
@@ -596,6 +602,7 @@ def process_cpu_fast(
         stage_parameter_provider=provider,
         progress=row_progress,
         diagnostics_row=diagnostics_row,
+        cancelled=cancelled,
     )
     _check_cancelled(cancelled)
     diagnostics = None
