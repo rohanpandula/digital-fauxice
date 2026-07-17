@@ -1,12 +1,13 @@
 """Compiled execution of the supported streaming profile (optional backend).
 
 The reconstruction math ported here is byte-identical to the CPU reference in
-``streaming.py`` and ``reconstruction.py``; only the per-attempted-pixel
-scalar chain runs through compiled kernels instead of per-call Python.  Row
-analysis (response lookup, auxiliary/score/weighted planes, decision
-eligibility, history-window construction), stage-parameter resolution,
-digesting, and callbacks stay in Python so behavior outside the compiled
-chain is unchanged.
+``streaming.py`` and ``reconstruction.py``.  Row cache products (response
+lookup, auxiliary/score/weighted planes, per-row stage-parameter resolution)
+stay in Python via the reference's own ``_RowCache``; the entire per-row loop
+-- decision eligibility, history-window boundary handling, feature records,
+candidates, combiner, and writer -- runs as one fused njit call per row.
+Emit, digest, callbacks, and cancellation stay per-row in Python so behavior
+outside the compiled chain is unchanged.
 
 Importing this module never requires numba.  Only calling into the compiled
 kernels does, and that failure is raised as :class:`CpuFastUnavailable` with a
@@ -48,8 +49,6 @@ from ..stage_parameters import (
 from ..streaming import (
     DiagnosticsRowCallback,
     StreamingReplayResult,
-    _decision_fallback_row,
-    _history_window,
     _RowCache,
     _startup_replay,
 )
@@ -96,11 +95,15 @@ def run_streaming_replay_fast(
 ) -> StreamingReplayResult:
     """Byte-exact compiled mirror of ``streaming.run_streaming_replay``.
 
-    Row analysis (response lookup, auxiliary/score/weighted planes, decision
-    eligibility, history-window construction) and the per-row emit/digest
-    stay identical Python/NumPy; only the per-selected-pixel scalar chain
-    (feature records, driver gate, candidates, combiner, writer) runs
-    through the fused njit kernel in ``kernels.py``.
+    Row cache products (response lookup, auxiliary/score/weighted planes via
+    ``_RowCache.get``, which resolves per-row stage-parameter swaps exactly
+    as the reference does) stay identical Python/NumPy and are materialized
+    once into whole-image planes.  The entire per-row loop -- eligibility,
+    history-window boundary handling, feature records, candidates, combiner,
+    and writer -- runs as one fused njit call per row
+    (``kernels.process_row``), so this is O(1) kernel invocations per row
+    instead of one per selected pixel.  Emit, digest, callbacks, and
+    cancellation stay per-row in Python.
     """
 
     kernels = _kernels()
@@ -143,9 +146,55 @@ def run_streaming_replay_fast(
     record_count = 5 if cross_neighbor else 1
     score_floor = np.float32(score_parameters.floor)
 
-    # Stable across the whole run: stage_parameter_provider only ever
-    # replaces coarse_reference/driver_gate_secondary/row_reconstruction_gate
-    # per row (see stage_parameters.py); everything else below is fixed.
+    # Materialize the row cache once. _RowCache.get(row) already resolves
+    # per-row stage-parameter swaps (source_stage_for_row/score_stage_for_row)
+    # exactly as the reference streaming loop does; this loop only stacks
+    # its results so the row kernel can index whole-image planes directly.
+    working_all = np.empty((height, width, 4), dtype=np.float32)
+    auxiliary_all = np.empty((height, width), dtype=np.float32)
+    score_all = np.empty((height, width), dtype=np.float32)
+    weighted_auxiliary_all = np.empty((height, width), dtype=np.float32)
+    weighted_rgb_all = np.empty((height, width, 3), dtype=np.float32)
+    noop_all = np.empty((height, width, 3), dtype=np.uint16)
+    for row in range(height):
+        analyzed = cache.get(row)
+        working_all[row] = analyzed.working
+        auxiliary_all[row] = analyzed.auxiliary
+        score_all[row] = analyzed.score
+        weighted_auxiliary_all[row] = analyzed.weighted_auxiliary
+        weighted_rgb_all[row] = analyzed.weighted_rgb
+        noop_all[row] = emit_public_rgb16(analyzed.working[np.newaxis, :, :3])[0]
+
+    # Per-row resolved scalars (stage_parameter_provider only ever replaces
+    # coarse_reference/driver_gate_secondary/row_reconstruction_gate; see
+    # stage_parameters.py), resolved once up front the same way the
+    # reference's row loop resolves them.
+    fallback_values = np.empty(height, dtype=np.float32)
+    floor_enabled_rows = np.zeros(height, dtype=np.uint8)
+    row_reconstruction_gates = np.zeros(height, dtype=np.int64)
+    driver_gate_primary = bool(reconstruction_parameters.driver_gate_primary)
+    for row in range(height):
+        active_reconstruction_parameters = reconstruction_parameters
+        if stage_parameter_provider is not None:
+            stage_hit = writer_stage_for_row(row)
+            writer_calibration = stage_parameter_provider(stage_hit)
+            validate_stage_calibration(writer_calibration, expected_stage_hit=stage_hit)
+            active_reconstruction_parameters = replace(
+                reconstruction_parameters,
+                coarse_reference=writer_calibration.base_primary,
+                driver_gate_secondary=writer_calibration.writer_gate_secondary,
+                row_reconstruction_gate=writer_calibration.row_reconstruction_gate,
+            )
+        fallback_values[row] = np.float32(active_reconstruction_parameters.coarse_reference)
+        floor_enabled_rows[row] = 1 if (
+            driver_gate_primary or active_reconstruction_parameters.driver_gate_secondary
+        ) else 0
+        row_reconstruction_gates[row] = int(
+            active_reconstruction_parameters.row_reconstruction_gate
+        )
+
+    # Stable across the whole run: everything else in ReconstructionParameters
+    # is never touched by stage_parameter_provider's per-row replace() calls.
     coarse_slopes = np.ascontiguousarray(
         reconstruction_parameters.coarse_slopes, dtype=np.float32
     )
@@ -164,7 +213,10 @@ def run_streaming_replay_fast(
         reconstruction_parameters.dither_scales, dtype=np.float32
     )
     coarse_enabled = bool(reconstruction_parameters.coarse_enabled)
-    driver_gate_primary = bool(reconstruction_parameters.driver_gate_primary)
+
+    decision_threshold = np.float32(decision_parameters.sample_threshold)
+    decision_radius = int(decision_parameters.perpendicular_radius)
+    decision_count_limit = int(decision_parameters.count_limit)
 
     low64 = float(np.float32(dither_bounds.low))
     high64 = float(np.float32(dither_bounds.high))
@@ -177,154 +229,50 @@ def run_streaming_replay_fast(
     output_hash = hashlib.sha256()
     state = int(active_generator.state)
 
-    # Reused scratch buffers: only ever read back through the neighbor_valid5
-    # gate, so stale content from a prior pixel/row is never observed.
-    score_patches = np.zeros((5, 9, 9), dtype=np.float32)
-    waux_patches = np.zeros((5, 9, 9), dtype=np.float32)
-    wrgb_center = np.zeros((9, 9, 3), dtype=np.float32)
-    point_aux5 = np.zeros(5, dtype=np.float32)
-    point_score5 = np.zeros(5, dtype=np.float32)
-    neighbor_valid5 = np.zeros(5, dtype=np.uint8)
-    neighbor_valid5[0] = 1
-    if cross_neighbor:
-        neighbor_valid5[3] = 1
-        neighbor_valid5[4] = 1
-
     for y in range(height):
-        active_reconstruction_parameters = reconstruction_parameters
-        if stage_parameter_provider is not None:
-            stage_hit = writer_stage_for_row(y)
-            writer_calibration = stage_parameter_provider(stage_hit)
-            validate_stage_calibration(writer_calibration, expected_stage_hit=stage_hit)
-            active_reconstruction_parameters = replace(
-                reconstruction_parameters,
-                coarse_reference=writer_calibration.base_primary,
-                driver_gate_secondary=writer_calibration.writer_gate_secondary,
-                row_reconstruction_gate=writer_calibration.row_reconstruction_gate,
-            )
-        floor_enabled = (
-            driver_gate_primary or active_reconstruction_parameters.driver_gate_secondary
-        )
-        fallback_value = np.float32(active_reconstruction_parameters.coarse_reference)
-        row_reconstruction_gate = int(active_reconstruction_parameters.row_reconstruction_gate)
-
-        current = cache.get(y)
-        noop = emit_public_rgb16(current.working[np.newaxis, :, :3])[0]
-        working_output = np.array(current.working[:, :3], dtype=np.float32, copy=True)
-        decision_fallback = _decision_fallback_row(
+        working_output, row_attempted, row_written, row_advances, state = kernels.process_row(
+            auxiliary_all,
+            score_all,
+            weighted_auxiliary_all,
+            weighted_rgb_all,
+            working_all,
             y,
-            height=height,
-            width=width,
-            cache=cache,
-            parameters=decision_parameters,
+            height,
+            width,
+            score_floor,
+            decision_threshold,
+            decision_radius,
+            decision_count_limit,
+            bool(floor_enabled_rows[y]),
+            int(row_reconstruction_gates[y]),
+            fallback_values[y],
+            record_count,
+            coarse_enabled,
+            coarse_slopes,
+            band_enabled,
+            band_scales,
+            factors_a,
+            factors_b,
+            configured_strengths,
+            low64,
+            high64,
+            low_lt_high,
+            dither_scales,
+            state,
         )
-        eligible = ~decision_fallback
-        if active_reconstruction_parameters.row_reconstruction_gate != 0:
-            eligible[:] = False
-        elif floor_enabled:
-            eligible &= current.score < np.float32(1.0)
-        selected_x = np.flatnonzero(eligible)
-        score_history, weighted_auxiliary_history, weighted_rgb_history = (
-            _history_window(
-                y,
-                height=height,
-                width=width,
-                cache=cache,
-                score_floor=score_floor,
-            )
-        )
+        attempted += int(row_attempted)
+        written += int(row_written)
+        public_advances += int(row_advances)
 
-        if cross_neighbor:
-            point_aux_center = current.auxiliary
-            point_score_center = current.score
-            if y == 0:
-                point_aux_up = cache.get(0).auxiliary
-                point_score_up = np.full(width, score_floor, dtype=np.float32)
-            else:
-                up_row = cache.get(y - 1)
-                point_aux_up = up_row.auxiliary
-                point_score_up = up_row.score
-            down_row = cache.get(height - 1 if y == height - 1 else y + 1)
-            point_aux_down = down_row.auxiliary
-            point_score_down = down_row.score
-
-        for x_value in selected_x:
-            x = int(x_value)
-            score_patches[0] = score_history[1:10, x : x + 9]
-            waux_patches[0] = weighted_auxiliary_history[1:10, x : x + 9]
-            wrgb_center[:] = weighted_rgb_history[1:10, x : x + 9, :]
-            point_aux5[0] = current.auxiliary[x]
-            point_score5[0] = current.score[x]
-
-            if cross_neighbor:
-                if x > 0:
-                    score_patches[1] = score_history[1:10, x - 1 : x - 1 + 9]
-                    waux_patches[1] = weighted_auxiliary_history[1:10, x - 1 : x - 1 + 9]
-                    point_aux5[1] = point_aux_center[x - 1]
-                    point_score5[1] = point_score_center[x - 1]
-                    neighbor_valid5[1] = 1
-                else:
-                    neighbor_valid5[1] = 0
-                if x < width - 1:
-                    score_patches[2] = score_history[1:10, x + 1 : x + 1 + 9]
-                    waux_patches[2] = weighted_auxiliary_history[1:10, x + 1 : x + 1 + 9]
-                    point_aux5[2] = point_aux_center[x + 1]
-                    point_score5[2] = point_score_center[x + 1]
-                    neighbor_valid5[2] = 1
-                else:
-                    neighbor_valid5[2] = 0
-                score_patches[3] = score_history[0:9, x : x + 9]
-                waux_patches[3] = weighted_auxiliary_history[0:9, x : x + 9]
-                point_aux5[3] = point_aux_up[x]
-                point_score5[3] = point_score_up[x]
-                score_patches[4] = score_history[2:11, x : x + 9]
-                waux_patches[4] = weighted_auxiliary_history[2:11, x : x + 9]
-                point_aux5[4] = point_aux_down[x]
-                point_score5[4] = point_score_down[x]
-
-            original_rgb = np.ascontiguousarray(current.working[x, :3])
-
-            attempted_flag, values, advances, state = kernels.process_selected_pixel(
-                score_patches,
-                waux_patches,
-                wrgb_center,
-                point_aux5,
-                point_score5,
-                neighbor_valid5,
-                record_count,
-                fallback_value,
-                original_rgb,
-                floor_enabled,
-                row_reconstruction_gate,
-                coarse_enabled,
-                coarse_slopes,
-                band_enabled,
-                band_scales,
-                factors_a,
-                factors_b,
-                configured_strengths,
-                low64,
-                high64,
-                low_lt_high,
-                dither_scales,
-                state,
-            )
-            if not attempted_flag:
-                continue
-            attempted += 1
-            working_output[x] = values
-            public_advances += int(advances)
-            written += int(np.any(values != original_rgb))
-
+        noop = noop_all[y]
         rendered = emit_public_rgb16(working_output[np.newaxis, :, :])[0]
         output[y] = rendered
         output_hash.update(rendered.astype("<u2", copy=False).tobytes(order="C"))
         changed += int(np.count_nonzero(np.any(rendered != noop, axis=1)))
         if diagnostics_row is not None:
-            diagnostics_row(y, current.score, score_floor, rendered, noop)
+            diagnostics_row(y, score_all[y], score_floor, rendered, noop)
         if progress is not None:
             progress(y + 1, height, attempted, written)
-        cache.discard_before(max(0, y - 5))
 
     active_generator.state = state
     return StreamingReplayResult(

@@ -1,12 +1,13 @@
-"""Compiled per-pixel kernels for the optional cpu-fast backend.
+"""Compiled per-pixel and per-row kernels for the optional cpu-fast backend.
 
 Every function here is a line-by-line port of the audited CPU reference in
-``reconstruction.py`` and ``dither.py``: the same float64 widening, float32
-narrowing, and accumulation order, with no fastmath, no parallel reductions,
-and no reassociation.  Callers gather the small per-pixel patches (already a
-cheap NumPy slice of the row-window arrays streaming.py builds) and pass them
-in; every scalar reduction, division, and store boundary below matches its
-reference counterpart's expression order exactly.
+``streaming.py``, ``reconstruction.py``, and ``dither.py``: the same float64
+widening, float32 narrowing, and accumulation order, with no fastmath, no
+parallel reductions, and no reassociation.  The entry point is
+``process_row``, which fuses one whole output row -- decision eligibility,
+history-window boundary handling, feature records, candidates, combiner, and
+writer -- into a single compiled call; its helpers gather 9x9 patches
+directly from whole-image planes the caller builds once per run.
 
 Importing this module requires numba.
 """
@@ -416,19 +417,199 @@ def write_pixel_scalar(candidate, original, floor_enabled, low64, high64, low_lt
     return values, np.int64(advances), state
 
 
+# ---------------------------------------------------------------------------
+# M2: whole-row fusion.  The scalar helpers above are the byte-exact per-
+# pixel chain (feature records, driver gate, candidates, combiner, writer).
+# The functions below replace the *gather* step -- instead of Python slicing
+# streaming._history_window's per-row padded strip once per selected pixel,
+# these index directly into whole-image auxiliary/score/weighted-auxiliary/
+# weighted-rgb/working planes with the exact same boundary rules
+# pad_reconstruction_history/_history_window encode:
+# horizontal guards stay zero, logical row -1 is the pseudo-row (score
+# floor; weighted = first-real-row * floor), rows >= height repeat the last
+# real row, and rows below -1 stay zero.  This mirrors the CUDA backend's
+# load_score_hist/load_waux_hist/load_wrgb_hist loaders, which are already
+# proven byte-exact against this same reference.
+# ---------------------------------------------------------------------------
+
+
 @njit(cache=True)
-def process_selected_pixel(
-    score_patches,
-    waux_patches,
-    wrgb_center,
-    point_aux5,
-    point_score5,
-    neighbor_valid5,
-    record_count,
-    fallback_value,
-    original_rgb,
+def load_score_hist(score_all, height, width, score_floor, y, x):
+    """streaming._history_window's score-history boundary rule, one sample."""
+
+    if x < 0 or x >= width:
+        return np.float32(0.0)
+    if y < -1:
+        return np.float32(0.0)
+    if y == -1:
+        return score_floor
+    if y >= height:
+        y = height - 1
+    return score_all[y, x]
+
+
+@njit(cache=True)
+def load_waux_hist(waux_all, aux_all, height, width, score_floor, y, x):
+    """streaming._history_window's weighted-auxiliary boundary rule.
+
+    The y == -1 pseudo-row multiplies the FIRST real row's raw auxiliary by
+    the score floor -- not that row's own weighted-auxiliary product.
+    """
+
+    if x < 0 or x >= width:
+        return np.float32(0.0)
+    if y < -1:
+        return np.float32(0.0)
+    if y == -1:
+        return np.float32(aux_all[0, x] * score_floor)
+    if y >= height:
+        y = height - 1
+    return waux_all[y, x]
+
+
+@njit(cache=True)
+def load_wrgb_hist_channel(wrgb_all, working_all, height, width, score_floor, y, x, channel):
+    """streaming._history_window's weighted-RGB boundary rule, one channel."""
+
+    if x < 0 or x >= width:
+        return np.float32(0.0)
+    if y < -1:
+        return np.float32(0.0)
+    if y == -1:
+        return np.float32(working_all[0, x, channel] * score_floor)
+    if y >= height:
+        y = height - 1
+    return wrgb_all[y, x, channel]
+
+
+@njit(cache=True)
+def gather_score_patch(score_all, height, width, score_floor, cy, cx, out):
+    for dy in range(-4, 5):
+        for dx in range(-4, 5):
+            out[dy + 4, dx + 4] = load_score_hist(
+                score_all, height, width, score_floor, cy + dy, cx + dx
+            )
+
+
+@njit(cache=True)
+def gather_waux_patch(waux_all, aux_all, height, width, score_floor, cy, cx, out):
+    for dy in range(-4, 5):
+        for dx in range(-4, 5):
+            out[dy + 4, dx + 4] = load_waux_hist(
+                waux_all, aux_all, height, width, score_floor, cy + dy, cx + dx
+            )
+
+
+@njit(cache=True)
+def gather_wrgb_patch(wrgb_all, working_all, height, width, score_floor, cy, cx, out):
+    for dy in range(-4, 5):
+        for dx in range(-4, 5):
+            for channel in range(3):
+                out[dy + 4, dx + 4, channel] = load_wrgb_hist_channel(
+                    wrgb_all, working_all, height, width, score_floor, cy + dy, cx + dx, channel
+                )
+
+
+@njit(cache=True)
+def compute_row_eligibility(
+    auxiliary_all,
+    score_all,
+    height,
+    width,
+    y,
+    threshold,
+    radius,
+    count_limit,
+    row_reconstruction_gate,
+    floor_enabled,
+    out_eligible,
+):
+    """streaming._decision_fallback_row + the row's eligibility gating.
+
+    Decision fallback uses simple edge-replicated row/column clamps (not the
+    zero/pseudo-row/repeat-last-row history boundary above) -- a distinct
+    windowing scheme on the raw auxiliary plane, matching
+    streaming._decision_fallback_row and _horizontal_low_count exactly.
+    """
+
+    if row_reconstruction_gate != 0:
+        for x in range(width):
+            out_eligible[x] = 0
+        return
+
+    for x in range(width):
+        lx = x - radius
+        if lx < 0:
+            lx = 0
+        elif lx >= width:
+            lx = width - 1
+        rx = x + radius
+        if rx < 0:
+            rx = 0
+        elif rx >= width:
+            rx = width - 1
+        vertical_left = 0
+        vertical_right = 0
+        for dy in range(-4, 5):
+            yy = y + dy
+            if yy < 0:
+                yy = 0
+            elif yy >= height:
+                yy = height - 1
+            if auxiliary_all[yy, lx] < threshold:
+                vertical_left += 1
+            if auxiliary_all[yy, rx] < threshold:
+                vertical_right += 1
+        ay = y - radius
+        if ay < 0:
+            ay = 0
+        by = y + radius
+        if by >= height:
+            by = height - 1
+        horizontal_above = 0
+        horizontal_below = 0
+        for dx in range(-4, 5):
+            xx = x + dx
+            if xx < 0:
+                xx = 0
+            elif xx >= width:
+                xx = width - 1
+            if auxiliary_all[ay, xx] < threshold:
+                horizontal_above += 1
+            if auxiliary_all[by, xx] < threshold:
+                horizontal_below += 1
+        decision_fallback = (
+            vertical_left > count_limit
+            or horizontal_above > count_limit
+            or vertical_right > count_limit
+            or horizontal_below > count_limit
+        )
+        if decision_fallback:
+            out_eligible[x] = 0
+        elif floor_enabled and score_all[y, x] >= np.float32(1.0):
+            out_eligible[x] = 0
+        else:
+            out_eligible[x] = 1
+
+
+@njit(cache=True)
+def process_row(
+    auxiliary_all,
+    score_all,
+    weighted_auxiliary_all,
+    weighted_rgb_all,
+    working_all,
+    y,
+    height,
+    width,
+    score_floor,
+    decision_threshold,
+    decision_radius,
+    decision_count_limit,
     floor_enabled,
     row_reconstruction_gate,
+    fallback_value,
+    record_count,
     coarse_enabled,
     coarse_slopes,
     band_enabled,
@@ -442,66 +623,199 @@ def process_selected_pixel(
     dither_scales,
     state,
 ):
-    """The full per-attempted-pixel chain: feature records -> driver gate ->
-    candidates -> combiner -> writer, fused into one compiled call.
+    """One entire output row: eligibility, then the fused per-pixel chain.
 
-    ``score_patches``/``waux_patches`` hold five 9x9 patches in the order
-    [center, left, right, up, down] (only index 0 is read when
-    ``record_count`` is 1).  ``point_aux5``/``point_score5``/
-    ``neighbor_valid5`` are the matching point values and the
-    "in-bounds" flag streaming._cross_neighbor_feature_record applies to the
-    two horizontal neighbors.  Returns
-    ``(attempted, values, rng_advances, new_state)``; when not attempted, the
-    caller must leave its output unchanged (``values`` is a no-op echo of
-    ``original_rgb``).
+    ``record_count`` is 1 (CENTER_ONLY) or 5 (CROSS_NEIGHBOR, gathering the
+    four adjacent feature records too).  Returns
+    ``(working_output_row, attempted, written, rng_advances, new_state)``.
     """
 
-    weights, center_feature = feature_weights_and_feature_scalar(
-        score_patches[0], waux_patches[0], point_aux5[0], point_score5[0], fallback_value
-    )
-    if driver_forces_fallback_scalar(weights[3], row_reconstruction_gate, floor_enabled):
-        return False, original_rgb, np.int64(0), state
+    working_output = np.empty((width, 3), dtype=np.float32)
+    for x in range(width):
+        working_output[x, 0] = working_all[y, x, 0]
+        working_output[x, 1] = working_all[y, x, 1]
+        working_output[x, 2] = working_all[y, x, 2]
 
+    eligible = np.empty(width, dtype=np.uint8)
+    compute_row_eligibility(
+        auxiliary_all,
+        score_all,
+        height,
+        width,
+        y,
+        decision_threshold,
+        decision_radius,
+        decision_count_limit,
+        row_reconstruction_gate,
+        floor_enabled,
+        eligible,
+    )
+
+    attempted = 0
+    written = 0
+    advances_total = np.int64(0)
+
+    score_patch = np.empty((9, 9), dtype=np.float32)
+    waux_patch = np.empty((9, 9), dtype=np.float32)
+    wrgb_patch = np.empty((9, 9, 3), dtype=np.float32)
     features = np.zeros((5, 4), dtype=np.float32)
-    for lane in range(4):
-        features[0, lane] = center_feature[lane]
-    if record_count == 5:
-        for i in range(1, 5):
-            feature_i = neighbor_feature_scalar(
-                score_patches[i],
-                waux_patches[i],
-                point_aux5[i],
-                point_score5[i],
-                fallback_value,
-                neighbor_valid5[i] != 0,
+    w3 = np.empty(3, dtype=np.float32)
+    original_rgb = np.empty(3, dtype=np.float32)
+
+    for x in range(width):
+        if eligible[x] == 0:
+            continue
+
+        gather_score_patch(score_all, height, width, score_floor, y, x, score_patch)
+        gather_waux_patch(
+            weighted_auxiliary_all, auxiliary_all, height, width, score_floor, y, x, waux_patch
+        )
+        weights, center_feature = feature_weights_and_feature_scalar(
+            score_patch, waux_patch, auxiliary_all[y, x], score_all[y, x], fallback_value
+        )
+        if driver_forces_fallback_scalar(weights[3], row_reconstruction_gate, floor_enabled):
+            continue
+        attempted += 1
+
+        for lane in range(4):
+            features[0, lane] = center_feature[lane]
+
+        if record_count == 5:
+            if x > 0:
+                gather_score_patch(score_all, height, width, score_floor, y, x - 1, score_patch)
+                gather_waux_patch(
+                    weighted_auxiliary_all,
+                    auxiliary_all,
+                    height,
+                    width,
+                    score_floor,
+                    y,
+                    x - 1,
+                    waux_patch,
+                )
+                feature_n = neighbor_feature_scalar(
+                    score_patch,
+                    waux_patch,
+                    auxiliary_all[y, x - 1],
+                    score_all[y, x - 1],
+                    fallback_value,
+                    True,
+                )
+            else:
+                feature_n = np.zeros(4, dtype=np.float32)
+            for lane in range(4):
+                features[1, lane] = feature_n[lane]
+
+            if x < width - 1:
+                gather_score_patch(score_all, height, width, score_floor, y, x + 1, score_patch)
+                gather_waux_patch(
+                    weighted_auxiliary_all,
+                    auxiliary_all,
+                    height,
+                    width,
+                    score_floor,
+                    y,
+                    x + 1,
+                    waux_patch,
+                )
+                feature_n = neighbor_feature_scalar(
+                    score_patch,
+                    waux_patch,
+                    auxiliary_all[y, x + 1],
+                    score_all[y, x + 1],
+                    fallback_value,
+                    True,
+                )
+            else:
+                feature_n = np.zeros(4, dtype=np.float32)
+            for lane in range(4):
+                features[2, lane] = feature_n[lane]
+
+            up_row = y - 1
+            gather_score_patch(score_all, height, width, score_floor, up_row, x, score_patch)
+            gather_waux_patch(
+                weighted_auxiliary_all,
+                auxiliary_all,
+                height,
+                width,
+                score_floor,
+                up_row,
+                x,
+                waux_patch,
+            )
+            if up_row < 0:
+                point_aux_u = auxiliary_all[0, x]
+                point_score_u = score_floor
+            else:
+                point_aux_u = auxiliary_all[up_row, x]
+                point_score_u = score_all[up_row, x]
+            feature_n = neighbor_feature_scalar(
+                score_patch, waux_patch, point_aux_u, point_score_u, fallback_value, True
             )
             for lane in range(4):
-                features[i, lane] = feature_i[lane]
+                features[3, lane] = feature_n[lane]
 
-    w3 = np.empty(3, dtype=np.float32)
-    w3[0] = weights[0]
-    w3[1] = weights[1]
-    w3[2] = weights[2]
-    candidates = rgb_candidates_scalar(wrgb_center, w3)
+            down_row = y + 1
+            gather_score_patch(score_all, height, width, score_floor, down_row, x, score_patch)
+            gather_waux_patch(
+                weighted_auxiliary_all,
+                auxiliary_all,
+                height,
+                width,
+                score_floor,
+                down_row,
+                x,
+                waux_patch,
+            )
+            clipped_down = down_row if down_row < height else height - 1
+            point_aux_d = auxiliary_all[clipped_down, x]
+            point_score_d = score_all[clipped_down, x]
+            feature_n = neighbor_feature_scalar(
+                score_patch, waux_patch, point_aux_d, point_score_d, fallback_value, True
+            )
+            for lane in range(4):
+                features[4, lane] = feature_n[lane]
 
-    combined = combine_candidate_scalar(
-        candidates[0],
-        candidates[1],
-        candidates[2],
-        original_rgb,
-        weights,
-        features,
-        record_count,
-        coarse_enabled,
-        fallback_value,
-        coarse_slopes,
-        band_enabled,
-        band_scales,
-        factors_a,
-        factors_b,
-        configured_strengths,
-    )
-    values, advances, new_state = write_pixel_scalar(
-        combined, original_rgb, floor_enabled, low64, high64, low_lt_high, dither_scales, state
-    )
-    return True, values, advances, new_state
+        gather_wrgb_patch(weighted_rgb_all, working_all, height, width, score_floor, y, x, wrgb_patch)
+        w3[0] = weights[0]
+        w3[1] = weights[1]
+        w3[2] = weights[2]
+        candidates = rgb_candidates_scalar(wrgb_patch, w3)
+
+        original_rgb[0] = working_all[y, x, 0]
+        original_rgb[1] = working_all[y, x, 1]
+        original_rgb[2] = working_all[y, x, 2]
+
+        combined = combine_candidate_scalar(
+            candidates[0],
+            candidates[1],
+            candidates[2],
+            original_rgb,
+            weights,
+            features,
+            record_count,
+            coarse_enabled,
+            fallback_value,
+            coarse_slopes,
+            band_enabled,
+            band_scales,
+            factors_a,
+            factors_b,
+            configured_strengths,
+        )
+        values, advances, state = write_pixel_scalar(
+            combined, original_rgb, floor_enabled, low64, high64, low_lt_high, dither_scales, state
+        )
+
+        working_output[x, 0] = values[0]
+        working_output[x, 1] = values[1]
+        working_output[x, 2] = values[2]
+        advances_total += advances
+        if (
+            values[0] != original_rgb[0]
+            or values[1] != original_rgb[1]
+            or values[2] != original_rgb[2]
+        ):
+            written += 1
+
+    return working_output, attempted, written, advances_total, state
