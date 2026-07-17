@@ -48,6 +48,16 @@ from .x3a import (
 
 UInt16Image = npt.NDArray[np.uint16]
 ProgressCallback = Callable[[int, int, int, int], None]
+DiagnosticsRowCallback = Callable[
+    [
+        int,
+        npt.NDArray[np.float32],
+        np.float32,
+        npt.NDArray[np.uint16],
+        npt.NDArray[np.uint16],
+    ],
+    None,
+]
 
 
 @dataclass(frozen=True)
@@ -365,6 +375,7 @@ def run_streaming_replay(
     generator: LCG24 | None = None,
     stage_parameter_provider: StageParameterProvider | None = None,
     progress: ProgressCallback | None = None,
+    diagnostics_row: DiagnosticsRowCallback | None = None,
 ) -> StreamingReplayResult:
     """Execute the CPU writer with memory bounded by image width.
 
@@ -523,6 +534,8 @@ def run_streaming_replay(
         output[y] = rendered
         output_hash.update(rendered.astype("<u2", copy=False).tobytes(order="C"))
         changed += int(np.count_nonzero(np.any(rendered != noop, axis=1)))
+        if diagnostics_row is not None:
+            diagnostics_row(y, current.score, score_floor, rendered, noop)
         if progress is not None:
             progress(y + 1, height, attempted, written)
         cache.discard_before(max(0, y - 5))

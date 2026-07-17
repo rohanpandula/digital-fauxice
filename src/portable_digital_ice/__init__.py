@@ -13,6 +13,7 @@ from .contracts import (
 )
 from .engine import (
     ProcessingCancelled,
+    ProcessingDiagnostics,
     ProcessingPhase,
     ProcessingProgress,
     ProcessingResult,
@@ -36,6 +37,7 @@ __all__ = [
     "DualRGBIAcquisition",
     "LS5000Selector8NormalProfile",
     "ProcessingCancelled",
+    "ProcessingDiagnostics",
     "ProcessingJob",
     "ProcessingMode",
     "ProcessingPhase",

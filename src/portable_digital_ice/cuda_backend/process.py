@@ -7,6 +7,7 @@ import numpy.typing as npt
 
 from ..engine import (
     CancellationCallback,
+    ProcessingDiagnostics,
     ProcessingPhase,
     ProcessingResult,
     ProgressCallback,
@@ -28,6 +29,7 @@ def process_cuda(
     progress: ProgressCallback | None = None,
     cancelled: CancellationCallback | None = None,
     stage_timings: dict | None = None,
+    export_diagnostics: bool = False,
 ) -> ProcessingResult:
     """Process one validated LS-5000 selector-8 Normal acquisition on CUDA.
 
@@ -88,6 +90,19 @@ def process_cuda(
         if not output.flags.writeable:
             raise ValueError("output must be writable")
 
+    diagnostic_score_plane: npt.NDArray[np.float32] | None = None
+    diagnostic_score_floor: np.float32 | None = None
+    diagnostic_at_floor_mask: npt.NDArray[np.bool_] | None = None
+    diagnostic_changed_mask: npt.NDArray[np.bool_] | None = None
+    if export_diagnostics:
+        diagnostic_shape = main_pixels.shape[:2]
+        diagnostic_score_plane = np.empty(diagnostic_shape, dtype=np.float32)
+        diagnostic_score_floor = np.float32(
+            DEFAULT_PROFILE.score_parameters(prepass.record).floor
+        )
+        diagnostic_at_floor_mask = np.empty(diagnostic_shape, dtype=np.bool_)
+        diagnostic_changed_mask = np.empty(diagnostic_shape, dtype=np.bool_)
+
     def row_progress(completed: int, total: int, attempted: int, written: int) -> None:
         _check_cancelled(cancelled)
         _notify(
@@ -115,13 +130,32 @@ def process_cuda(
         progress=row_progress,
         cancelled=cancelled,
         stage_timings=stage_timings,
+        _diagnostic_score_plane=diagnostic_score_plane,
+        _diagnostic_at_floor_mask=diagnostic_at_floor_mask,
+        _diagnostic_changed_mask=diagnostic_changed_mask,
     )
     _check_cancelled(cancelled)
     _notify(progress, ProcessingPhase.COMPLETE, 1, 1)
+    diagnostics = None
+    if export_diagnostics:
+        assert diagnostic_score_plane is not None
+        assert diagnostic_score_floor is not None
+        assert diagnostic_at_floor_mask is not None
+        assert diagnostic_changed_mask is not None
+        diagnostic_score_plane.flags.writeable = False
+        diagnostic_at_floor_mask.flags.writeable = False
+        diagnostic_changed_mask.flags.writeable = False
+        diagnostics = ProcessingDiagnostics(
+            score_plane=diagnostic_score_plane,
+            score_floor=diagnostic_score_floor,
+            at_floor_mask=diagnostic_at_floor_mask,
+            changed_mask=diagnostic_changed_mask,
+        )
     return ProcessingResult(
         output_rgb16=output,
         replay=replay,
         profile_id=DEFAULT_PROFILE.profile_id,
+        diagnostics=diagnostics,
     )
 
 
