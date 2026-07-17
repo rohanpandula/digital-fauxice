@@ -1,0 +1,23 @@
+{
+  "schema": "portable-digital-ice-cuda-parity-receipt-v1",
+  "status": "PASS",
+  "claim": "CUDA backend byte parity with the CPU reference of this package, 300-row native-width crop of validation frame 1",
+  "geometry_hwc": [
+    300,
+    3946,
+    3
+  ],
+  "compared_rgb16_samples": 3551400,
+  "mismatch_samples": 0,
+  "cpu_and_cuda_output_sha256": "4b1999e0c233bab259b0554d8ea75aaea035d37d74a4eb40bf87f5fdc93aa7aa",
+  "attempted_pixels": 158725,
+  "written_pixels": 142427,
+  "changed_pixels": 142368,
+  "public_rng_advances": 800621,
+  "final_rng_state": 13143990,
+  "main_fixture_sha256": "368a9fdb230ee8d6ed88b3c30e7f22c947051a3a62d4e4f22043cc02e7c3275e",
+  "prepass_fixture_sha256": "3756c15e20a396189392b86db1c2172e117f5d45abd25964d11740ce3c72934a",
+  "note": "Same crop job on both backends inside the validation container; an Apple Silicon CPU run of the same crop produced identical counters, giving cross-architecture three-way agreement.",
+  "cuda_elapsed_seconds": 4.06,
+  "cpu_elapsed_seconds": 72.457
+}

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "portable-digital-ice"
+version = "0.1.0"
+description = "Portable CPU runtime for a validated dual-RGBI scanner profile"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.4,<3",
+]
+
+[project.optional-dependencies]
+cuda = [
+    "cupy-cuda12x>=13",
+]
+test = [
+    "pytest>=9,<10",
+]
+dev = [
+    "pytest>=9,<10",
+    "ruff>=0.11",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+testpaths = ["tests"]

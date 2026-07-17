@@ -1,0 +1,37 @@
+{
+  "schema": "portable-digital-ice-public-receipt-v1",
+  "status": "PASS",
+  "claim": "LS-5000 selector-8 Digital ICE Normal complete native 4000 frame",
+  "geometry_hwc": [5782, 3946, 3],
+  "compared_rgb16_samples": 68447316,
+  "mismatch_samples": 0,
+  "mismatch_pixels": 0,
+  "maximum_absolute_delta": 0,
+  "absolute_delta_sum": 0,
+  "portable_changed_pixels": 6426156,
+  "oracle_changed_pixels": 6426156,
+  "changed_overlap_pixels": 6426156,
+  "changed_union_pixels": 6426156,
+  "public_rng_advances": 34596507,
+  "final_rng_state": 8880392,
+  "unbound_cross_edge_fallback_pixels": 0,
+  "logical_output_sha256": "c3ee49f49f71cbc544da595901522d945f549464f0f3b9a543e98171e56f6ad7",
+  "source_manifest_sha256": "089d6496065685f3791cd1ad0ccd140e284aa2d0e0d1672727e30de288a26f8c",
+  "canonical_private_receipt_sha256": "763e5d2748a0d56121c9adbcc61b29a67544a535598451d477bc06e70fbc636e",
+  "gate_checks_passed": 25,
+  "gate_checks_total": 25,
+  "runtime": {
+    "machine": "arm64",
+    "os": "macOS",
+    "python": "3.14.6",
+    "numpy": "2.4.0",
+    "elapsed_seconds": 4313.758
+  },
+  "runtime_dependencies": {
+    "nikon_binary_loaded": false,
+    "decompiler_artifact_read": false,
+    "nikon_snapshot_trace_read": false,
+    "captured_producer_records_read": false,
+    "oracle_used_for_comparison_only": true
+  }
+}

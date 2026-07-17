@@ -1,0 +1,110 @@
+{
+ "environment": {
+  "name": "NVIDIA RTX A4000",
+  "compute_capability": "8.6",
+  "total_vram_bytes": 16740515840,
+  "free_vram_bytes": 16554917888,
+  "driver_version": 13030,
+  "runtime_version": 12090,
+  "cupy_version": "14.1.1",
+  "nvrtc_options": [
+   "--fmad=false",
+   "--std=c++17"
+  ]
+ },
+ "cold_crop_seconds_including_compile": 3.653879786026664,
+ "crop_300_rows_warm": [
+  {
+   "wall_seconds": 2.2927679179701954,
+   "output_sha256": "4b1999e0c233bab259b0554d8ea75aaea035d37d74a4eb40bf87f5fdc93aa7aa"
+  },
+  {
+   "wall_seconds": 2.293897119932808,
+   "output_sha256": "4b1999e0c233bab259b0554d8ea75aaea035d37d74a4eb40bf87f5fdc93aa7aa"
+  },
+  {
+   "wall_seconds": 2.283039533998817,
+   "output_sha256": "4b1999e0c233bab259b0554d8ea75aaea035d37d74a4eb40bf87f5fdc93aa7aa"
+  }
+ ],
+ "full_frame_warm": [
+  {
+   "wall_seconds": 21.37997977505438,
+   "output_sha256": "c3ee49f49f71cbc544da595901522d945f549464f0f3b9a543e98171e56f6ad7",
+   "final_rng_state": 8880392,
+   "public_rng_advances": 34596507,
+   "attempted_pixels": 6883933,
+   "written_pixels": 6431211,
+   "changed_pixels": 6426156,
+   "stage_timings_seconds": {
+    "download.output": 0.173619,
+    "host.prepass": 0.102428,
+    "host.row-parameter-table": 0.011959,
+    "host.sha256": 0.104949,
+    "host.startup-replay": 1.710823,
+    "kernel.assemble-emit.device": 0.001629,
+    "kernel.compact-selected.device": 0.001578,
+    "kernel.convert-auxiliary.device": 0.003245,
+    "kernel.decision-eligibility.device": 0.001721,
+    "kernel.features-combine.device": 0.179413,
+    "kernel.score-weighted.device": 0.002337,
+    "kernel.writer-chain.device": 18.521738,
+    "producer.total": 0.325613,
+    "upload.inputs.device": 0.030381
+   }
+  },
+  {
+   "wall_seconds": 21.100091201020405,
+   "output_sha256": "c3ee49f49f71cbc544da595901522d945f549464f0f3b9a543e98171e56f6ad7",
+   "final_rng_state": 8880392,
+   "public_rng_advances": 34596507,
+   "attempted_pixels": 6883933,
+   "written_pixels": 6431211,
+   "changed_pixels": 6426156,
+   "stage_timings_seconds": {
+    "download.output": 0.148484,
+    "host.prepass": 0.100684,
+    "host.row-parameter-table": 0.012411,
+    "host.sha256": 0.113946,
+    "host.startup-replay": 1.743405,
+    "kernel.assemble-emit.device": 0.001633,
+    "kernel.compact-selected.device": 0.00139,
+    "kernel.convert-auxiliary.device": 0.003202,
+    "kernel.decision-eligibility.device": 0.00173,
+    "kernel.features-combine.device": 0.173108,
+    "kernel.score-weighted.device": 0.002338,
+    "kernel.writer-chain.device": 18.367561,
+    "producer.total": 0.194715,
+    "upload.inputs.device": 0.018736
+   }
+  },
+  {
+   "wall_seconds": 21.337521052919328,
+   "output_sha256": "c3ee49f49f71cbc544da595901522d945f549464f0f3b9a543e98171e56f6ad7",
+   "final_rng_state": 8880392,
+   "public_rng_advances": 34596507,
+   "attempted_pixels": 6883933,
+   "written_pixels": 6431211,
+   "changed_pixels": 6426156,
+   "stage_timings_seconds": {
+    "download.output": 0.246897,
+    "host.prepass": 0.101152,
+    "host.row-parameter-table": 0.012003,
+    "host.sha256": 0.103408,
+    "host.startup-replay": 1.691078,
+    "kernel.assemble-emit.device": 0.001631,
+    "kernel.compact-selected.device": 0.001278,
+    "kernel.convert-auxiliary.device": 0.003201,
+    "kernel.decision-eligibility.device": 0.00172,
+    "kernel.features-combine.device": 0.163771,
+    "kernel.score-weighted.device": 0.002328,
+    "kernel.writer-chain.device": 18.467006,
+    "producer.total": 0.192335,
+    "upload.inputs.device": 0.018568
+   }
+  }
+ ],
+ "deterministic_across_runs": true,
+ "vram_pool_highwater_bytes": 2083058688,
+ "peak_host_rss_bytes": 1373356032
+}

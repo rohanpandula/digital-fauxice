@@ -1,0 +1,340 @@
+{
+ "rows_profiled": 300,
+ "width": 3946,
+ "wall_seconds_under_cprofile": 142.503462416993,
+ "attempted_pixels": 158725,
+ "written_pixels": 142427,
+ "public_rng_advances": 800621,
+ "changed_pixels": 142368,
+ "stage_tottime_seconds": {
+  "feature-records": 84.33748843100001,
+  "reconstruction-candidates": 19.884042343000004,
+  "rng-dither-writer": 5.249760503999999,
+  "row-cache-orchestration": 3.338252116,
+  "rolling-producer-state": 0.9900424130000001,
+  "startup-replay": 0.9306452820000001,
+  "prepass-frame-calibration": 0.48026819400000004,
+  "decision-and-history": 0.12624907500000002,
+  "rgb16-output-conversion": 0.072043566,
+  "response-table-lookup": 0.033805190000000006,
+  "auxiliary-and-score": 0.023426578000000003
+ },
+ "top_functions_by_tottime": [
+  {
+   "function": "_vertical_scratch",
+   "module": "reconstruction.py",
+   "ncalls": 1785427,
+   "tottime": 51.568724981,
+   "cumtime": 53.1178614
+  },
+  {
+   "function": "_vertical_binomial_16",
+   "module": "reconstruction.py",
+   "ncalls": 1785427,
+   "tottime": 18.570539056,
+   "cumtime": 19.059975527000002
+  },
+  {
+   "function": "_recovered_unscaled_averages",
+   "module": "reconstruction.py",
+   "ncalls": 1785427,
+   "tottime": 8.996251286,
+   "cumtime": 81.793649922
+  },
+  {
+   "function": "asymmetric_dead_zone_residual",
+   "module": "reconstruction.py",
+   "ncalls": 476175,
+   "tottime": 5.082672491,
+   "cumtime": 9.767956245
+  },
+  {
+   "function": "recovered_rgb_candidates",
+   "module": "reconstruction.py",
+   "ncalls": 158725,
+   "tottime": 5.073021506,
+   "cumtime": 26.519113700000002
+  },
+  {
+   "function": "combine_recovered_candidate",
+   "module": "reconstruction.py",
+   "ncalls": 158725,
+   "tottime": 4.801889833000001,
+   "cumtime": 25.977363942
+  },
+  {
+   "function": "_feature_record",
+   "module": "streaming.py",
+   "ncalls": 793625,
+   "tottime": 3.8431919580000002,
+   "cumtime": 68.083917079
+  },
+  {
+   "function": "_wrapreduction_any_all",
+   "module": "fromnumeric.py",
+   "ncalls": 4782095,
+   "tottime": 3.344758005,
+   "cumtime": 6.496036364
+  },
+  {
+   "function": "<built-in method numpy.empty>",
+   "module": "~",
+   "ncalls": 12822872,
+   "tottime": 3.2126351860000004,
+   "cumtime": 3.2126351860000004
+  },
+  {
+   "function": "<method 'reduce' of 'numpy.ufunc' objects>",
+   "module": "~",
+   "ncalls": 5734451,
+   "tottime": 3.1573097110000004,
+   "cumtime": 3.1573097110000004
+  },
+  {
+   "function": "run_streaming_replay",
+   "module": "streaming.py",
+   "ncalls": 1,
+   "tottime": 3.004332118,
+   "cumtime": 140.573587167
+  },
+  {
+   "function": "feature_band_ranges",
+   "module": "reconstruction.py",
+   "ncalls": 158725,
+   "tottime": 2.3749778160000004,
+   "cumtime": 5.3609904010000005
+  },
+  {
+   "function": "conditional_dither_delta",
+   "module": "dither.py",
+   "ncalls": 801976,
+   "tottime": 2.268300748,
+   "cumtime": 4.5481338870000005
+  },
+  {
+   "function": "write_reconstructed_pixel",
+   "module": "reconstruction.py",
+   "ncalls": 158725,
+   "tottime": 2.233402899,
+   "cumtime": 7.733000052
+  },
+  {
+   "function": "all",
+   "module": "fromnumeric.py",
+   "ncalls": 4604823,
+   "tottime": 1.752081599,
+   "cumtime": 7.9025291410000005
+  },
+  {
+   "function": "<method 'astype' of 'numpy.ndarray' objects>",
+   "module": "~",
+   "ncalls": 3680273,
+   "tottime": 1.64213987,
+   "cumtime": 1.64213987
+  },
+  {
+   "function": "_recovered_rgb_unscaled_averages",
+   "module": "reconstruction.py",
+   "ncalls": 158725,
+   "tottime": 1.2747374200000001,
+   "cumtime": 17.745116442
+  },
+  {
+   "function": "_cross_neighbor_feature_record",
+   "module": "streaming.py",
+   "ncalls": 634900,
+   "tottime": 1.1871334260000002,
+   "cumtime": 55.531920212
+  },
+  {
+   "function": "<built-in method numpy.asarray>",
+   "module": "~",
+   "ncalls": 4611493,
+   "tottime": 1.161877628,
+   "cumtime": 1.161877628
+  },
+  {
+   "function": "stack",
+   "module": "shape_base.py",
+   "ncalls": 158728,
+   "tottime": 1.1536441990000001,
+   "cumtime": 1.3181159690000002
+  },
+  {
+   "function": "replay_hidden_startup_rows",
+   "module": "startup.py",
+   "ncalls": 1,
+   "tottime": 0.9303972,
+   "cumtime": 4.11751825
+  },
+  {
+   "function": "<genexpr>",
+   "module": "reconstruction.py",
+   "ncalls": 1111075,
+   "tottime": 0.8549978090000001,
+   "cumtime": 2.349750563
+  },
+  {
+   "function": "<built-in method builtins.all>",
+   "module": "~",
+   "ncalls": 1009837,
+   "tottime": 0.7952894570000001,
+   "cumtime": 4.352350762
+  },
+  {
+   "function": "<genexpr>",
+   "module": "dither.py",
+   "ncalls": 4009880,
+   "tottime": 0.789072875,
+   "cumtime": 1.0044637840000001
+  },
+  {
+   "function": "_automatic_strengths",
+   "module": "reconstruction.py",
+   "ncalls": 158725,
+   "tottime": 0.7760552810000001,
+   "cumtime": 1.125486363
+  },
+  {
+   "function": "<method 'items' of 'dict' objects>",
+   "module": "~",
+   "ncalls": 5734445,
+   "tottime": 0.684848239,
+   "cumtime": 0.684848239
+  },
+  {
+   "function": "_wrapreduction",
+   "module": "fromnumeric.py",
+   "ncalls": 952350,
+   "tottime": 0.6543325170000001,
+   "cumtime": 1.3436531070000002
+  },
+  {
+   "function": "derive_producer_mean_schedule",
+   "module": "producer_parameters.py",
+   "ncalls": 1,
+   "tottime": 0.549857002,
+   "cumtime": 0.5499960420000001
+  },
+  {
+   "function": "<method 'append' of 'list' objects>",
+   "module": "~",
+   "ncalls": 4044055,
+   "tottime": 0.520224652,
+   "cumtime": 0.520224652
+  },
+  {
+   "function": "driver_forces_fallback",
+   "module": "reconstruction.py",
+   "ncalls": 158725,
+   "tottime": 0.500687996,
+   "cumtime": 0.922994669
+  },
+  {
+   "function": "issubdtype",
+   "module": "numerictypes.py",
+   "ncalls": 476188,
+   "tottime": 0.405299403,
+   "cumtime": 1.044205612
+  },
+  {
+   "function": "_scale_epoch_additions",
+   "module": "producer_parameters.py",
+   "ncalls": 37,
+   "tottime": 0.403971644,
+   "cumtime": 1.154148545
+  },
+  {
+   "function": "_all_dispatcher",
+   "module": "fromnumeric.py",
+   "ncalls": 4604823,
+   "tottime": 0.36683379600000005,
+   "cumtime": 0.36683379600000005
+  },
+  {
+   "function": "<built-in method math.isfinite>",
+   "module": "~",
+   "ncalls": 4983717,
+   "tottime": 0.35247955200000003,
+   "cumtime": 0.35247955200000003
+  },
+  {
+   "function": "issubclass_",
+   "module": "numerictypes.py",
+   "ncalls": 952376,
+   "tottime": 0.34179288900000004,
+   "cumtime": 0.594438941
+  },
+  {
+   "function": "get",
+   "module": "streaming.py",
+   "ncalls": 642375,
+   "tottime": 0.333919998,
+   "cumtime": 0.549140803
+  },
+  {
+   "function": "_f32",
+   "module": "producer_parameters.py",
+   "ncalls": 772143,
+   "tottime": 0.311887144,
+   "cumtime": 0.311887144
+  },
+  {
+   "function": "<built-in method builtins.issubclass>",
+   "module": "~",
+   "ncalls": 1428564,
+   "tottime": 0.29711332,
+   "cumtime": 0.29711332
+  },
+  {
+   "function": "__post_init__",
+   "module": "reconstruction.py",
+   "ncalls": 476175,
+   "tottime": 0.293164074,
+   "cumtime": 0.341435657
+  },
+  {
+   "function": "sample",
+   "module": "rng.py",
+   "ncalls": 800621,
+   "tottime": 0.290680606,
+   "cumtime": 0.748056857
+  },
+  {
+   "function": "_quadrant_means",
+   "module": "producer_parameters.py",
+   "ncalls": 18828,
+   "tottime": 0.27940164900000003,
+   "cumtime": 0.31912073300000005
+  },
+  {
+   "function": "__post_init__",
+   "module": "reconstruction.py",
+   "ncalls": 158725,
+   "tottime": 0.27673895800000003,
+   "cumtime": 0.27673895800000003
+  },
+  {
+   "function": "centered_unit",
+   "module": "rng.py",
+   "ncalls": 800621,
+   "tottime": 0.259358117,
+   "cumtime": 0.457376251
+  },
+  {
+   "function": "min",
+   "module": "fromnumeric.py",
+   "ncalls": 476175,
+   "tottime": 0.257421962,
+   "cumtime": 0.9823526290000001
+  },
+  {
+   "function": "<genexpr>",
+   "module": "reconstruction.py",
+   "ncalls": 793625,
+   "tottime": 0.237198186,
+   "cumtime": 0.237198186
+  }
+ ],
+ "note": "cProfile attribution of the CPU reference on the first 300 native-width rows of validation frame 1; wall time is inflated by profiler overhead, relative attribution is the signal. Used to choose the CUDA hybrid boundary."
+}

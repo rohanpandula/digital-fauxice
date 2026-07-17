@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software in research, please cite it using this metadata."
+title: "Portable Digital ICE"
+type: software
+authors:
+  - family-names: "Pandula"
+    given-names: "Rohan"
+repository-code: "https://github.com/rohanpandula/portable-digital-ice"
+license: MIT
+version: 0.1.0
+date-released: 2026-07-17

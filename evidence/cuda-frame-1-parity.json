@@ -1,0 +1,58 @@
+{
+  "schema": "portable-digital-ice-cuda-parity-receipt-v1",
+  "status": "PASS",
+  "claim": "CUDA backend byte parity with the CPU reference of this package, complete native 4000 frame (validation frame 1)",
+  "geometry_hwc": [
+    5782,
+    3946,
+    3
+  ],
+  "compared_rgb16_samples": 68447316,
+  "mismatch_samples": 0,
+  "mismatch_pixels": 0,
+  "maximum_absolute_delta": 0,
+  "absolute_delta_sum": 0,
+  "full_width_prefix_rows_0_90_equal": true,
+  "cpu_and_cuda_output_sha256": "c3ee49f49f71cbc544da595901522d945f549464f0f3b9a543e98171e56f6ad7",
+  "attempted_pixels": 6883933,
+  "written_pixels": 6431211,
+  "changed_pixels": 6426156,
+  "public_rng_advances": 34596507,
+  "final_rng_state": 8880392,
+  "startup_rng_advances_per_stage": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "main_fixture_sha256": "368a9fdb230ee8d6ed88b3c30e7f22c947051a3a62d4e4f22043cc02e7c3275e",
+  "prepass_fixture_sha256": "3756c15e20a396189392b86db1c2172e117f5d45abd25964d11740ce3c72934a",
+  "gate_checks_passed": 12,
+  "gate_checks_total": 12,
+  "source_manifest_sha256": "569225f9eb5152b5bc6e5961796609a6bda9b8db67c94247ef54e04b9d64246b",
+  "canonical_private_receipt_sha256": "b17eb2f421e2dfdd3d8a5716c22e90bb8f4499b69d6466e8e42041fa568a9c3e",
+  "cuda_runtime": {
+    "gpu": "NVIDIA RTX A4000",
+    "compute_capability": "8.6",
+    "driver_version": 13030,
+    "cuda_runtime_version": 12090,
+    "cupy": "14.1.1",
+    "nvrtc_options": [
+      "--fmad=false",
+      "--std=c++17"
+    ],
+    "python": "3.12.3",
+    "numpy": "2.5.1",
+    "container": "nvidia/cuda:12.6.3-devel-ubuntu24.04 (Docker, NVIDIA runtime)",
+    "elapsed_seconds": 21.483
+  },
+  "cpu_reference_runtime": {
+    "machine": "arm64",
+    "os": "macOS",
+    "python": "3.13.5",
+    "numpy": "2.5.1",
+    "elapsed_seconds": 3545.66
+  }
+}

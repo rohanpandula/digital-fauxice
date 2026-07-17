@@ -1,0 +1,13 @@
+Portable Digital ICE
+Copyright (c) 2026 Rohan Pandula
+
+This repository is an independent, from-scratch interoperability project. It is
+not affiliated with, endorsed by, or supported by Nikon or the owners of
+Digital ICE.
+
+Nikon, Nikon Scan, COOLSCAN, and Digital ICE are trademarks or registered
+trademarks of their respective owners. Their names are used only to identify
+the compatible hardware and behavior studied by this project.
+
+No Nikon executable, library, firmware image, proprietary profile, scanner
+capture, or comparison oracle is distributed in this repository.

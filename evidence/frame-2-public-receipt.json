@@ -1,0 +1,41 @@
+{
+  "schema": "portable-digital-ice-public-receipt-v1",
+  "status": "PASS",
+  "claim": "LS-5000 selector-8 Digital ICE Normal independent complete native 4000 frame, no retuning",
+  "geometry_hwc": [5782, 3946, 3],
+  "compared_rgb16_samples": 68447316,
+  "mismatch_samples": 0,
+  "mismatch_pixels": 0,
+  "maximum_absolute_delta": 0,
+  "absolute_delta_sum": 0,
+  "portable_changed_pixels": 6718151,
+  "oracle_changed_pixels": 6718151,
+  "changed_overlap_pixels": 6718151,
+  "changed_union_pixels": 6718151,
+  "public_rng_advances": 36383248,
+  "final_rng_state": 16418997,
+  "unbound_cross_edge_fallback_pixels": 0,
+  "logical_output_sha256": "f2e9b84ddc6bc49e2e34b9dd86cac992ba12add6e0f4a14720e2fde74719958a",
+  "source_manifest_sha256": "089d6496065685f3791cd1ad0ccd140e284aa2d0e0d1672727e30de288a26f8c",
+  "canonical_private_receipt_sha256": "0aa6afe0f169253e92e27c000f6a38606c259b3c1c4aa92c5aff9ccf1de00749",
+  "gate_checks_passed": 25,
+  "gate_checks_total": 25,
+  "independent_content": {
+    "registered_highpass_correlation_to_frame_1": 0.003436,
+    "known_repeat_correlation": 0.617244
+  },
+  "runtime": {
+    "machine": "arm64",
+    "os": "macOS",
+    "python": "3.14.6",
+    "numpy": "2.5.1",
+    "elapsed_seconds": 2934.204
+  },
+  "runtime_dependencies": {
+    "nikon_binary_loaded": false,
+    "decompiler_artifact_read": false,
+    "nikon_snapshot_trace_read": false,
+    "captured_producer_records_read": false,
+    "oracle_used_for_comparison_only": true
+  }
+}

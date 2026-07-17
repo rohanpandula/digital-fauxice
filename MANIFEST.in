@@ -1,0 +1,7 @@
+include DERIVATION.md
+include CITATION.cff
+include CONTRIBUTING.md
+include SECURITY.md
+recursive-include docs *.md
+recursive-include evidence *.json
+recursive-include tests *.py
