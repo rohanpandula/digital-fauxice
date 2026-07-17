@@ -1,0 +1,65 @@
+{
+  "schema": "portable-digital-ice-cpu-fast-parity-receipt-v1",
+  "status": "PASS",
+  "claim": "Compiled CPU (cpu-fast) backend byte parity with the CPU reference of this package, complete native 4000 frame (validation frame 1)",
+  "geometry_hwc": [
+    5782,
+    3946,
+    3
+  ],
+  "compared_rgb16_samples": 68447316,
+  "mismatch_samples": 0,
+  "mismatch_pixels": 0,
+  "maximum_absolute_delta": 0,
+  "absolute_delta_sum": 0,
+  "diagnostics_planes_equal": true,
+  "cpu_and_cpu_fast_output_sha256": "c3ee49f49f71cbc544da595901522d945f549464f0f3b9a543e98171e56f6ad7",
+  "attempted_pixels": 6883933,
+  "written_pixels": 6431211,
+  "changed_pixels": 6426156,
+  "public_rng_advances": 34596507,
+  "final_rng_state": 8880392,
+  "startup_rng_advances_per_stage": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "main_fixture_sha256": "368a9fdb230ee8d6ed88b3c30e7f22c947051a3a62d4e4f22043cc02e7c3275e",
+  "prepass_fixture_sha256": "3756c15e20a396189392b86db1c2172e117f5d45abd25964d11740ce3c72934a",
+  "gate_checks_passed": 20,
+  "gate_checks_total": 20,
+  "determinism": {
+    "consecutive_runs_identical": true,
+    "thread_counts_byte_equal": [
+      1,
+      3,
+      10
+    ]
+  },
+  "source_manifest_sha256": "7632ba3b91e31137f06469c62a026c9e4875ba5895bbd19a13caa416f00107ff",
+  "canonical_private_receipt_sha256": "fdde770aefe4b477baa6abd13b8b358cca0f8934d5d427463a5729af536a8308",
+  "cpu_fast_runtime": {
+    "machine": "arm64",
+    "os": "macOS",
+    "cpu": "Apple M4",
+    "python": "3.13.5",
+    "numpy": "2.4.6",
+    "numba": "0.66.0",
+    "llvmlite": "0.48.0",
+    "numba_threads": 10,
+    "elapsed_seconds_per_run": [
+      10.241,
+      10.985
+    ]
+  },
+  "cpu_reference_runtime": {
+    "machine": "arm64",
+    "os": "macOS",
+    "python": "3.13.5",
+    "numpy": "2.5.1",
+    "elapsed_seconds": 3545.66
+  }
+}
