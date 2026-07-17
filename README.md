@@ -1,10 +1,10 @@
-# Portable Digital ICE
+# Digital Fauxice
 
 By Rohan Pandula
 
-[![tests](https://github.com/rohanpandula/portable-digital-ice/actions/workflows/tests.yml/badge.svg)](https://github.com/rohanpandula/portable-digital-ice/actions/workflows/tests.yml)
+[![tests](https://github.com/rohanpandula/digital-fauxice/actions/workflows/tests.yml/badge.svg)](https://github.com/rohanpandula/digital-fauxice/actions/workflows/tests.yml)
 
-Portable Digital ICE is an independent, from-scratch reimplementation of the
+Digital Fauxice is an independent, from-scratch reimplementation of the
 Nikon LS-5000 selector-8 Digital ICE Normal processing path. It reproduced
 Nikon's logical 16-bit RGB output exactly on two different 3,946 x 5,782
 physical frames: 68,447,316 samples per frame with zero mismatches. The second
@@ -29,7 +29,7 @@ It uses a low-resolution prepass, content-derived calibration, several local
 reconstruction scales, deterministic conditional dither, and a block scheduler
 with unusual edge behavior.
 
-Portable Digital ICE recreates that processing without loading Nikon code at
+Digital Fauxice recreates that processing without loading Nikon code at
 runtime. The Nikon result appears only in the validation campaign as a read-only
 comparison oracle.
 
@@ -134,8 +134,8 @@ color research.
 The reference package requires Python 3.11 or newer and NumPy.
 
 ```sh
-git clone https://github.com/rohanpandula/portable-digital-ice.git
-cd portable-digital-ice
+git clone https://github.com/rohanpandula/digital-fauxice.git
+cd digital-fauxice
 python -m pip install -e '.[dev]'
 pytest
 ```
@@ -149,6 +149,10 @@ error before output is written.
 The scanner acquisition adapter and end-user TIFF workflow are still product
 work. See [`docs/input-contract.md`](docs/input-contract.md) for the library
 boundary.
+
+The Python distribution remains `portable-digital-ice`, and the import path
+remains `portable_digital_ice`, so the new project name does not break v0.1
+integrations.
 
 ## Performance and backends
 
@@ -173,6 +177,20 @@ exact before its complete output matches the reference byte for byte.
 The NegPy integration is being developed separately so this repository remains
 a small, scanner-focused engine rather than an application fork.
 
+## Hybrid repair plans
+
+The exact engine will remain available unchanged. In my current testing, its
+infrared-guided repair already beats generic RGB-only inpainting. I am also
+planning an opt-in hybrid mode for defects that are difficult to reconstruct
+with the exact local method. It will use infrared data to locate the damage,
+keep the exact repair where confidence is high, and allow a bounded
+content-aware fallback only inside low-confidence regions.
+
+Hybrid output will keep the raw inputs and a per-pixel provenance mask. It will
+have its own validation label and will never be described as byte-exact Nikon
+output. The proposed gates and implementation order are in the
+[`hybrid repair roadmap`](docs/hybrid-repair-agent-prompt.md).
+
 ## Repository map
 
 | Path | Contents |
@@ -183,6 +201,7 @@ a small, scanner-focused engine rather than an application fork.
 | `docs/reverse-engineering.md` | Research method and the hard parts of the recovery |
 | `docs/validation.md` | Exact gates, receipt semantics, and limits |
 | `docs/input-contract.md` | Dual-RGBI acquisition and API requirements |
+| `docs/hybrid-repair-agent-prompt.md` | Roadmap and validation rules for the optional hybrid mode |
 
 ## License and names
 
