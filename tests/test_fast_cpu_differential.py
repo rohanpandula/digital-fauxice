@@ -407,6 +407,26 @@ def test_diagnostics_planes_match_cpu() -> None:
     _assert_job_parity(main, prepass, "diagnostics-check", export_diagnostics=True)
 
 
+def test_multi_band_frame_matches_cpu() -> None:
+    """A frame spanning multiple analysis bands plus a partial final band.
+
+    The band size is 128 rows; height 300 exercises two full bands, a
+    44-row partial band, and the LCG threading across every band boundary.
+    """
+
+    rng = np.random.default_rng(20260725)
+    height, width = 300, 16
+    main = rng.integers(18000, 62000, size=(height, width, 4), dtype=np.uint16)
+    # dust straddling both band boundaries (rows 128 and 256) and the tail
+    main[120:136, 4:12, 3] = rng.integers(200, 2500, size=(16, 8), dtype=np.uint16)
+    main[250:262, 2:10, 3] = rng.integers(200, 2500, size=(12, 8), dtype=np.uint16)
+    main[290:298, 6:14, 3] = 700
+    speckle_y = rng.integers(0, height, size=150)
+    speckle_x = rng.integers(0, width, size=150)
+    main[speckle_y, speckle_x, 3] = rng.integers(200, 3000, size=150).astype(np.uint16)
+    _assert_job_parity(main, _prepass(rng), "multi-band", export_diagnostics=True)
+
+
 def test_thread_count_determinism() -> None:
     """Outputs, digests, and counters are byte-equal for every thread count.
 

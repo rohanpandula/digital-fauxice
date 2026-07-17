@@ -193,6 +193,45 @@ def test_cpu_fast_self_test_outcome_is_cached(monkeypatch):
         assert calls["n"] == 1
 
 
+def test_cpu_fast_full_surface_with_caller_buffer_and_callbacks():
+    """process() drives the caller buffer, diagnostics, and both callbacks."""
+
+    if not _numba_present():
+        pytest.skip("numba is unavailable")
+    from portable_digital_ice import ProcessingPhase
+
+    job = _tiny_job()
+    buffer = np.zeros((12, 24, 3), dtype=np.uint16)
+    phases: list[ProcessingPhase] = []
+    cancel_calls = {"n": 0}
+
+    def not_cancelled() -> bool:
+        cancel_calls["n"] += 1
+        return False
+
+    routed = process(
+        job,
+        backend=ComputeBackend.CPU_FAST,
+        output_rgb16=buffer,
+        export_diagnostics=True,
+        progress=lambda event: phases.append(event.phase),
+        cancelled=not_cancelled,
+    )
+    assert routed.selection.used is ComputeBackend.CPU_FAST
+    assert routed.result.output_rgb16 is buffer
+    cpu = process_cpu(_tiny_job())
+    assert np.array_equal(buffer, cpu.output_rgb16)
+    diagnostics = routed.result.diagnostics
+    assert diagnostics is not None
+    assert diagnostics.score_plane.shape == (12, 24)
+    assert diagnostics.at_floor_mask.shape == (12, 24)
+    assert diagnostics.changed_mask.shape == (12, 24)
+    assert phases[0] is ProcessingPhase.VALIDATING
+    assert ProcessingPhase.RECONSTRUCTION in phases
+    assert phases[-1] is ProcessingPhase.COMPLETE
+    assert cancel_calls["n"] > 0
+
+
 def test_cpu_fast_parity_comparison_catches_tampered_results(monkeypatch):
     """The shared parity check must flag sample and diagnostics mismatches."""
 
