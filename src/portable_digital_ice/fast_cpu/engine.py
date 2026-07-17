@@ -493,9 +493,11 @@ def process_cpu_fast(
     the streaming row work is replaced by ``run_streaming_replay_fast``.
     """
 
-    _kernels()  # fail closed before any work when numba is unavailable
     _notify(progress, ProcessingPhase.VALIDATING, 0, 1)
+    # Unsupported jobs fail identically to the reference, before the numba
+    # availability probe; only then does the compiled path fail closed.
     DEFAULT_PROFILE.validate_job(job)
+    _kernels()
     main_pixels = job.acquisition.main.pixels
     expected_shape = (*main_pixels.shape[:2], 3)
     destination: npt.NDArray[np.uint16] | None = None
