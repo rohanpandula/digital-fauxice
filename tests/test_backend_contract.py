@@ -1,15 +1,19 @@
-"""Backend-selection contract: cpu exact, cuda fail-closed, auto self-tested.
+"""Backend-selection contract: cpu exact, cuda/cpu-fast fail-closed, auto
+self-tested.
 
-These tests run on every machine.  Where behavior depends on whether CUDA is
-actually present, both legs are asserted explicitly.
+These tests run on every machine.  Where behavior depends on whether CUDA or
+numba is actually present, every leg is asserted explicitly.
 """
 
 from __future__ import annotations
+
+from contextlib import contextmanager
 
 import numpy as np
 import pytest
 
 from portable_digital_ice import ComputeBackend, process, process_cpu
+from portable_digital_ice import backend as backend_module
 from portable_digital_ice.contracts import (
     AcquisitionEpoch,
     DualRGBIAcquisition,
@@ -30,6 +34,27 @@ def _cuda_present() -> bool:
         return True
     except Exception:
         return False
+
+
+def _numba_present() -> bool:
+    try:
+        import numba  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+@contextmanager
+def _self_test_cache_snapshot():
+    """Isolate self-test cache mutations so tests stay order-independent."""
+
+    saved = dict(backend_module._SELF_TEST_CACHE)
+    try:
+        yield backend_module._SELF_TEST_CACHE
+    finally:
+        backend_module._SELF_TEST_CACHE.clear()
+        backend_module._SELF_TEST_CACHE.update(saved)
 
 
 def _tiny_job(frame_id: str = "backend-contract") -> ProcessingJob:
@@ -55,6 +80,7 @@ def _tiny_job(frame_id: str = "backend-contract") -> ProcessingJob:
 def test_backend_enum_values():
     assert ComputeBackend.AUTO.value == "auto"
     assert ComputeBackend.CPU.value == "cpu"
+    assert ComputeBackend.CPU_FAST.value == "cpu-fast"
     assert ComputeBackend.CUDA.value == "cuda"
 
 
@@ -102,11 +128,103 @@ def test_auto_reports_reason_and_never_fails_closed():
     if _cuda_present():
         assert routed.selection.used is ComputeBackend.CUDA
         assert "self-test" in routed.selection.reason
+    elif _numba_present():
+        assert routed.selection.used is ComputeBackend.CPU_FAST
+        assert "CUDA unavailable" in routed.selection.reason
+        assert "self-test passed byte parity" in routed.selection.reason
+        import numba
+
+        assert f"numba {numba.__version__}" in routed.selection.reason
     else:
         assert routed.selection.used is ComputeBackend.CPU
         assert "CUDA unavailable" in routed.selection.reason
+        assert "cpu-fast unavailable" in routed.selection.reason
+        assert "using exact CPU reference" in routed.selection.reason
     cpu = process_cpu(_tiny_job())
     assert routed.result.replay.output_sha256 == cpu.replay.output_sha256
+
+
+def test_cpu_fast_request_matches_cpu_or_fails_clearly():
+    from portable_digital_ice.fast_cpu import CpuFastUnavailable
+
+    job = _tiny_job()
+    if _numba_present():
+        routed = process(job, backend=ComputeBackend.CPU_FAST)
+        assert routed.selection.used is ComputeBackend.CPU_FAST
+        assert "self-test passed byte parity" in routed.selection.reason
+        import numba
+
+        assert f"numba {numba.__version__}" in routed.selection.reason
+        cpu = process_cpu(_tiny_job())
+        assert routed.result.replay.output_sha256 == cpu.replay.output_sha256
+        assert routed.result.replay == cpu.replay
+    else:
+        with pytest.raises(CpuFastUnavailable):
+            process(job, backend=ComputeBackend.CPU_FAST)
+
+
+def test_cpu_fast_string_request_is_accepted():
+    if not _numba_present():
+        pytest.skip("numba is unavailable")
+    routed = process(_tiny_job(), backend="cpu-fast")
+    assert routed.selection.used is ComputeBackend.CPU_FAST
+
+
+def test_cpu_fast_self_test_outcome_is_cached(monkeypatch):
+    if not _numba_present():
+        pytest.skip("numba is unavailable")
+    from portable_digital_ice import fast_cpu
+
+    calls = {"n": 0}
+    real_process_cpu_fast = fast_cpu.process_cpu_fast
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real_process_cpu_fast(*args, **kwargs)
+
+    with _self_test_cache_snapshot() as cache:
+        cache.pop("cpu-fast-outcome", None)
+        monkeypatch.setattr(
+            "portable_digital_ice.fast_cpu.process_cpu_fast", counting
+        )
+        backend_module.cpu_fast_self_test()
+        assert calls["n"] == 1
+        backend_module.cpu_fast_self_test()  # cached success: no rerun
+        assert calls["n"] == 1
+
+
+def test_cpu_fast_failure_is_cached_and_fails_closed(monkeypatch):
+    from portable_digital_ice.fast_cpu import CpuFastUnavailable
+
+    calls = {"n": 0}
+
+    def broken(*args, **kwargs):
+        calls["n"] += 1
+        raise CpuFastUnavailable("numba is not importable: injected for test")
+
+    with _self_test_cache_snapshot() as cache:
+        cache.pop("cpu-fast-outcome", None)
+        monkeypatch.setattr(
+            "portable_digital_ice.fast_cpu.process_cpu_fast", broken
+        )
+        with pytest.raises(CpuFastUnavailable):
+            process(_tiny_job(), backend=ComputeBackend.CPU_FAST)
+        assert calls["n"] == 1
+        # The failure outcome is cached: later calls raise without rerunning.
+        with pytest.raises(CpuFastUnavailable) as second:
+            process(_tiny_job(), backend=ComputeBackend.CPU_FAST)
+        assert calls["n"] == 1
+        assert "numba is not importable" in str(second.value)
+        # AUTO records both fallthrough reasons and still returns exact output.
+        routed = process(_tiny_job(), backend=ComputeBackend.AUTO)
+        if _cuda_present():
+            assert routed.selection.used is ComputeBackend.CUDA
+        else:
+            assert routed.selection.used is ComputeBackend.CPU
+            assert "CUDA unavailable" in routed.selection.reason
+            assert "cpu-fast unavailable" in routed.selection.reason
+        cpu = process_cpu(_tiny_job())
+        assert routed.result.replay.output_sha256 == cpu.replay.output_sha256
 
 
 def test_cancellation_does_not_corrupt_output():
