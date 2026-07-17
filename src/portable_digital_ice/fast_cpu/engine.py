@@ -34,10 +34,7 @@ from ..engine import (
 )
 from ..output import emit_public_rgb16
 from ..prepass import reduce_prepass_frame
-from ..producer_parameters import (
-    ContentDerivedStageParameterProvider,
-    derive_producer_record_schedule,
-)
+from ..producer_parameters import ContentDerivedStageParameterProvider
 from ..profile import DEFAULT_PROFILE, ProcessingJob
 from ..reconstruction import FeatureBandExtremaMode, feature_band_extrema_mode
 from ..rng import LCG24
@@ -302,6 +299,7 @@ def process_cpu_fast(
     the streaming row work is replaced by ``run_streaming_replay_fast``.
     """
 
+    _kernels()  # fail closed before any work when numba is unavailable
     _notify(progress, ProcessingPhase.VALIDATING, 0, 1)
     DEFAULT_PROFILE.validate_job(job)
     main_pixels = job.acquisition.main.pixels
@@ -329,7 +327,9 @@ def process_cpu_fast(
     _notify(progress, ProcessingPhase.PREPASS, 1, 1)
 
     _notify(progress, ProcessingPhase.PRODUCER, 0, 1)
-    schedule = derive_producer_record_schedule(main_pixels, response.table)
+    from .producer import derive_producer_record_schedule_fast
+
+    schedule = derive_producer_record_schedule_fast(main_pixels, response.table)
     provider = ContentDerivedStageParameterProvider(
         schedule,
         auxiliary_factor_b=DEFAULT_PROFILE.auxiliary_factor_b,
