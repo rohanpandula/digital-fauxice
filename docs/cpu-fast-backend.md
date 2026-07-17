@@ -17,10 +17,13 @@ tree's current source manifest.
 python -m pip install -e '.[fast]'
 ```
 
-The `fast` extra installs numba. The first cpu-fast run in a process pays a
-one-time JIT compile or compile-cache load; the kernels are cached on disk
-(`cache=True`), and the startup self-test doubles as the warmup. Recorded
-per-frame times exclude that first-call cost.
+The `fast` extra installs numba. numba currently caps numpy below 2.5, so
+the effective combined requirement with this package is numpy 2.4.x; an
+incompatible pre-installed numpy surfaces as `CpuFastUnavailable` carrying
+the underlying import error in its message. The first cpu-fast run in a
+process pays a one-time JIT compile or compile-cache load; the kernels are
+cached on disk (`cache=True`), and the startup self-test doubles as the
+warmup. Recorded per-frame times exclude that first-call cost.
 
 ## Selecting a backend
 
@@ -93,9 +96,10 @@ complete 5,782 x 3,946 native frame, warm process:
 | Repeated-run output hash | identical (deterministic) |
 
 The compiled path materializes whole-image analysis planes instead of the
-reference's eleven-row streaming window, so peak host memory is about 2 GB
-at the supported full-frame geometry (the reference stays memory-bounded by
-image width). Progress callbacks still fire per row with exact cumulative
+reference's eleven-row streaming window, so peak host memory scales with
+height x width -- about 2 GB at the supported full-frame geometry -- while
+the reference stays memory-bounded by image width alone. Progress callbacks
+still fire per row with exact cumulative
 totals; cooperative cancellation is honored per row while the analysis
 planes are prepared and per band (128 rows) during writing, and can never
 corrupt partial output because the caller's buffer is written only once,
