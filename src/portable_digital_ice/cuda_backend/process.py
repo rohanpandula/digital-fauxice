@@ -91,11 +91,15 @@ def process_cuda(
             raise ValueError("output must be writable")
 
     diagnostic_score_plane: npt.NDArray[np.float32] | None = None
+    diagnostic_score_floor: np.float32 | None = None
     diagnostic_at_floor_mask: npt.NDArray[np.bool_] | None = None
     diagnostic_changed_mask: npt.NDArray[np.bool_] | None = None
     if export_diagnostics:
         diagnostic_shape = main_pixels.shape[:2]
         diagnostic_score_plane = np.empty(diagnostic_shape, dtype=np.float32)
+        diagnostic_score_floor = np.float32(
+            DEFAULT_PROFILE.score_parameters(prepass.record).floor
+        )
         diagnostic_at_floor_mask = np.empty(diagnostic_shape, dtype=np.bool_)
         diagnostic_changed_mask = np.empty(diagnostic_shape, dtype=np.bool_)
 
@@ -135,6 +139,7 @@ def process_cuda(
     diagnostics = None
     if export_diagnostics:
         assert diagnostic_score_plane is not None
+        assert diagnostic_score_floor is not None
         assert diagnostic_at_floor_mask is not None
         assert diagnostic_changed_mask is not None
         diagnostic_score_plane.flags.writeable = False
@@ -142,6 +147,7 @@ def process_cuda(
         diagnostic_changed_mask.flags.writeable = False
         diagnostics = ProcessingDiagnostics(
             score_plane=diagnostic_score_plane,
+            score_floor=diagnostic_score_floor,
             at_floor_mask=diagnostic_at_floor_mask,
             changed_mask=diagnostic_changed_mask,
         )

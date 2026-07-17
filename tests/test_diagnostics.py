@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
 from portable_digital_ice import (
+    DualRGBIAcquisition,
     ComputeBackend,
     ProcessingDiagnostics,
     ProcessingJob,
+    RGBI16Frame,
     process,
     process_cpu,
 )
@@ -64,6 +68,8 @@ def test_cpu_diagnostics_are_typed_shaped_and_read_only(
     assert isinstance(diagnostics, ProcessingDiagnostics)
     shape = supported_job.acquisition.main.pixels.shape[:2]
     assert diagnostics.score_plane.dtype == np.dtype(np.float32)
+    assert np.asarray(diagnostics.score_floor).dtype == np.dtype(np.float32)
+    assert np.asarray(diagnostics.score_floor).ndim == 0
     assert diagnostics.at_floor_mask.dtype == np.dtype(np.bool_)
     assert diagnostics.changed_mask.dtype == np.dtype(np.bool_)
     assert diagnostics.score_plane.shape == shape
@@ -89,7 +95,8 @@ def test_cpu_diagnostic_masks_match_the_exact_run(
     diagnostics = result.diagnostics
     assert diagnostics is not None
 
-    floor = _score_floor(supported_job)
+    floor = diagnostics.score_floor
+    assert floor.view(np.uint32) == _score_floor(supported_job).view(np.uint32)
     np.testing.assert_array_equal(
         diagnostics.at_floor_mask,
         diagnostics.score_plane == floor,
@@ -99,6 +106,34 @@ def test_cpu_diagnostic_masks_match_the_exact_run(
     expected_changed = np.any(result.output_rgb16 != _noop_rgb16(supported_job), axis=2)
     np.testing.assert_array_equal(diagnostics.changed_mask, expected_changed)
     assert int(np.count_nonzero(diagnostics.changed_mask)) == result.replay.changed_pixels
+
+
+def test_cpu_at_floor_mask_is_non_vacuous_and_uses_horizontal_minimum(
+    supported_job: ProcessingJob,
+) -> None:
+    acquisition = supported_job.acquisition
+    main_pixels = acquisition.main.pixels.copy()
+    main_pixels[3:5, 3:5, 3] = np.uint16(0)
+    main = RGBI16Frame(
+        main_pixels,
+        acquisition.main.epoch,
+        acquisition.main.resolution_dpi,
+        "diagnostic-floor-main",
+    )
+    job = replace(
+        supported_job,
+        acquisition=DualRGBIAcquisition(
+            prepass=acquisition.prepass,
+            main=main,
+            same_frame_id="diagnostic-floor-frame",
+        ),
+    )
+
+    diagnostics = process_cpu(job, export_diagnostics=True).diagnostics
+    assert diagnostics is not None
+    expected_patch = np.zeros((8, 8), dtype=bool)
+    expected_patch[3:5, 2:6] = True
+    np.testing.assert_array_equal(diagnostics.at_floor_mask, expected_patch)
 
 
 def test_cpu_diagnostics_flag_does_not_change_output(
@@ -143,6 +178,10 @@ def test_cuda_diagnostics_match_cpu_and_preserve_output() -> None:
     np.testing.assert_array_equal(
         cpu_with.diagnostics.score_plane.view(np.uint32),
         cuda_with.diagnostics.score_plane.view(np.uint32),
+    )
+    assert (
+        cpu_with.diagnostics.score_floor.view(np.uint32)
+        == cuda_with.diagnostics.score_floor.view(np.uint32)
     )
     np.testing.assert_array_equal(
         cpu_with.diagnostics.at_floor_mask,

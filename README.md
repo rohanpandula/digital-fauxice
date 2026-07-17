@@ -170,6 +170,13 @@ unusable; `auto` selects CUDA only after a startup self-test passes byte
 parity. See [`docs/cuda-backend.md`](docs/cuda-backend.md) and the receipts
 under [`evidence/`](evidence/).
 
+An optional sibling [`fauxce-hybrid`](../hybrid-repair/docs/hybrid-repair.md)
+tool can route narrowly defined saturated diagnostic regions to a pinned LaMa
+inpainting runtime. It is deliberately **not** an exact backend: its receipt
+limits the byte-exact claim to pixels outside an explicit synthesis mask and
+labels every pixel inside that mask as generative content. The core package
+does not depend on the hybrid tool or its ML runtime.
+
 A Metal backend for Apple Silicon remains planned under the same rule:
 availability and speed are not parity evidence, and no backend is labeled
 exact before its complete output matches the reference byte for byte.
