@@ -27,16 +27,12 @@ import numpy.typing as npt
 from ..dither import DitherBounds
 from ..engine import (
     CancellationCallback,
-    ProcessingDiagnostics,
-    ProcessingPhase,
     ProcessingResult,
     _check_cancelled,
-    _notify,
+    _run_supported_job,
 )
 from ..output import InverseResponseFactors, emit_public_rgb16
-from ..prepass import reduce_prepass_frame
-from ..producer_parameters import ContentDerivedStageParameterProvider
-from ..profile import DEFAULT_PROFILE, ProcessingJob
+from ..profile import ProcessingJob
 from ..reconstruction import FeatureBandExtremaMode, feature_band_extrema_mode
 from ..rng import LCG24, LCG24_MASK, NIKON_NORMALIZATION
 from ..stage_parameters import (
@@ -549,148 +545,32 @@ def process_cpu_fast(
     """Process one validated LS-5000 selector-8 Normal acquisition on the
     compiled CPU backend.
 
-    Byte-identical to :func:`portable_digital_ice.engine.process_cpu`; only
-    the streaming row work is replaced by ``run_streaming_replay_fast``.
+    Byte-identical to :func:`portable_digital_ice.engine.process_cpu`: the
+    orchestration is the reference's own shared body, with the compiled
+    producer schedule and streaming replay substituted and a fail-closed
+    numba availability probe run right after job validation.
     """
 
-    _notify(progress, ProcessingPhase.VALIDATING, 0, 1)
-    # Unsupported jobs fail identically to the reference, before the numba
-    # availability probe; only then does the compiled path fail closed.
-    DEFAULT_PROFILE.validate_job(job)
-    _kernels()
-    main_pixels = job.acquisition.main.pixels
-    expected_shape = (*main_pixels.shape[:2], 3)
-    destination: npt.NDArray[np.uint16] | None = None
-    if output_rgb16 is not None:
-        destination = np.asarray(output_rgb16)
-        if destination.dtype != np.dtype(np.uint16) or destination.shape != expected_shape:
-            raise ValueError(f"output must be writable uint16 with shape {expected_shape}")
-        if not destination.flags.writeable:
-            raise ValueError("output must be writable")
-    _check_cancelled(cancelled)
-    _notify(progress, ProcessingPhase.VALIDATING, 1, 1)
+    def _pre_check() -> None:
+        _kernels()
 
-    response = SharedLookupInputResponse.nikon_logarithmic()
-    _notify(progress, ProcessingPhase.PREPASS, 0, 1)
-    prepass = reduce_prepass_frame(
-        job.acquisition.prepass,
-        parameters=DEFAULT_PROFILE.prepass_parameters(),
-        frame_index=0,
-        evidence_id=f"portable-prepass:{job.acquisition.same_frame_id}",
-        response=response,
-    )
-    _check_cancelled(cancelled)
-    _notify(progress, ProcessingPhase.PREPASS, 1, 1)
+    def _derive_schedule(pixels, table):
+        from .producer import derive_producer_record_schedule_fast
 
-    _notify(progress, ProcessingPhase.PRODUCER, 0, 1)
-    from .producer import derive_producer_record_schedule_fast
+        return derive_producer_record_schedule_fast(pixels, table)
 
-    schedule = derive_producer_record_schedule_fast(main_pixels, response.table)
-    provider = ContentDerivedStageParameterProvider(
-        schedule,
-        auxiliary_factor_b=DEFAULT_PROFILE.auxiliary_factor_b,
-        hold_last_through_stage=job.acquisition.main.height + 6,
-    )
-    _check_cancelled(cancelled)
-    _notify(progress, ProcessingPhase.PRODUCER, 1, 1)
-
-    working_output = np.empty(expected_shape, dtype=np.uint16)
-    score_plane: npt.NDArray[np.float32] | None = None
-    diagnostic_score_floor: np.float32 | None = None
-    at_floor_mask: npt.NDArray[np.bool_] | None = None
-    changed_mask: npt.NDArray[np.bool_] | None = None
-    diagnostics_row = None
-    if export_diagnostics:
-        diagnostic_shape = main_pixels.shape[:2]
-        score_plane = np.empty(diagnostic_shape, dtype=np.float32)
-        diagnostic_score_floor = np.float32(
-            DEFAULT_PROFILE.score_parameters(prepass.record).floor
-        )
-        at_floor_mask = np.empty(diagnostic_shape, dtype=bool)
-        changed_mask = np.empty(diagnostic_shape, dtype=bool)
-
-        def capture_diagnostics_row(
-            y: int,
-            score: npt.NDArray[np.float32],
-            score_floor: np.float32,
-            rendered: npt.NDArray[np.uint16],
-            noop: npt.NDArray[np.uint16],
-        ) -> None:
-            assert score_plane is not None
-            assert diagnostic_score_floor is not None
-            assert at_floor_mask is not None
-            assert changed_mask is not None
-            if score_floor.view(np.uint32) != diagnostic_score_floor.view(np.uint32):
-                raise RuntimeError("diagnostic score floor disagrees with replay")
-            score_plane[y] = score
-            at_floor_mask[y] = score == score_floor
-            changed_mask[y] = np.any(rendered != noop, axis=1)
-
-        diagnostics_row = capture_diagnostics_row
-
-    def row_progress(
-        completed: int,
-        total: int,
-        attempted: int,
-        written: int,
-    ) -> None:
-        _check_cancelled(cancelled)
-        _notify(
-            progress,
-            ProcessingPhase.RECONSTRUCTION,
-            completed,
-            total,
-            attempted,
-            written,
+    def _run_replay(main_pixels, working_output, **kwargs):
+        return run_streaming_replay_fast(
+            main_pixels, working_output, cancelled=cancelled, **kwargs
         )
 
-    _notify(
-        progress,
-        ProcessingPhase.RECONSTRUCTION,
-        0,
-        job.acquisition.main.height,
-    )
-    replay = run_streaming_replay_fast(
-        main_pixels,
-        working_output,
-        response=response,
-        auxiliary_parameters=DEFAULT_PROFILE.auxiliary_parameters(prepass.record),
-        score_parameters=DEFAULT_PROFILE.score_parameters(prepass.record),
-        decision_parameters=DEFAULT_PROFILE.decision_parameters(),
-        reconstruction_parameters=DEFAULT_PROFILE.reconstruction_parameters(
-            prepass.record
-        ),
-        dither_bounds=DEFAULT_PROFILE.dither_bounds(response.table),
-        stage_parameter_provider=provider,
-        progress=row_progress,
-        diagnostics_row=diagnostics_row,
+    return _run_supported_job(
+        job,
+        output_rgb16=output_rgb16,
+        progress=progress,
         cancelled=cancelled,
-    )
-    _check_cancelled(cancelled)
-    diagnostics = None
-    if export_diagnostics:
-        assert score_plane is not None
-        assert diagnostic_score_floor is not None
-        assert at_floor_mask is not None
-        assert changed_mask is not None
-        score_plane.setflags(write=False)
-        at_floor_mask.setflags(write=False)
-        changed_mask.setflags(write=False)
-        diagnostics = ProcessingDiagnostics(
-            score_plane=score_plane,
-            score_floor=diagnostic_score_floor,
-            at_floor_mask=at_floor_mask,
-            changed_mask=changed_mask,
-        )
-    if destination is None:
-        output = working_output
-    else:
-        np.copyto(destination, working_output)
-        output = destination
-    _notify(progress, ProcessingPhase.COMPLETE, 1, 1)
-    return ProcessingResult(
-        output_rgb16=output,
-        replay=replay,
-        profile_id=DEFAULT_PROFILE.profile_id,
-        diagnostics=diagnostics,
+        export_diagnostics=export_diagnostics,
+        derive_schedule=_derive_schedule,
+        run_replay=_run_replay,
+        pre_check=_pre_check,
     )

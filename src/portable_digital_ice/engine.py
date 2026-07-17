@@ -107,22 +107,31 @@ def _check_cancelled(cancelled: CancellationCallback | None) -> None:
         raise ProcessingCancelled("portable correction was cancelled")
 
 
-def process_cpu(
+def _run_supported_job(
     job: ProcessingJob,
     *,
-    output_rgb16: npt.NDArray[np.uint16] | None = None,
-    progress: ProgressCallback | None = None,
-    cancelled: CancellationCallback | None = None,
-    export_diagnostics: bool = False,
+    output_rgb16: npt.NDArray[np.uint16] | None,
+    progress: ProgressCallback | None,
+    cancelled: CancellationCallback | None,
+    export_diagnostics: bool,
+    derive_schedule: Callable[[npt.NDArray[np.uint16], npt.NDArray[np.float32]], object],
+    run_replay: Callable[..., StreamingReplayResult],
+    pre_check: Callable[[], None] | None = None,
 ) -> ProcessingResult:
-    """Process one validated LS-5000 selector-8 Normal acquisition on CPU.
+    """Shared orchestration for one supported job on any exact CPU-side path.
 
-    A caller-owned output is committed only after successful completion.
-    Validation errors and cancellation leave that buffer unchanged.
+    ``derive_schedule`` and ``run_replay`` select the producer-schedule and
+    streaming implementations; ``pre_check`` (run after job validation) lets
+    an optional backend fail closed before any work.  Everything else --
+    validation order, prepass, provider construction, diagnostics capture,
+    progress phases, cancellation, and the commit-only-on-success output
+    rule -- is identical for every caller.
     """
 
     _notify(progress, ProcessingPhase.VALIDATING, 0, 1)
     DEFAULT_PROFILE.validate_job(job)
+    if pre_check is not None:
+        pre_check()
     main_pixels = job.acquisition.main.pixels
     expected_shape = (*main_pixels.shape[:2], 3)
     destination: npt.NDArray[np.uint16] | None = None
@@ -148,7 +157,7 @@ def process_cpu(
     _notify(progress, ProcessingPhase.PREPASS, 1, 1)
 
     _notify(progress, ProcessingPhase.PRODUCER, 0, 1)
-    schedule = derive_producer_record_schedule(main_pixels, response.table)
+    schedule = derive_schedule(main_pixels, response.table)
     provider = ContentDerivedStageParameterProvider(
         schedule,
         auxiliary_factor_b=DEFAULT_PROFILE.auxiliary_factor_b,
@@ -213,7 +222,7 @@ def process_cpu(
         0,
         job.acquisition.main.height,
     )
-    replay = run_streaming_replay(
+    replay = run_replay(
         main_pixels,
         working_output,
         response=response,
@@ -255,6 +264,31 @@ def process_cpu(
         replay=replay,
         profile_id=DEFAULT_PROFILE.profile_id,
         diagnostics=diagnostics,
+    )
+
+
+def process_cpu(
+    job: ProcessingJob,
+    *,
+    output_rgb16: npt.NDArray[np.uint16] | None = None,
+    progress: ProgressCallback | None = None,
+    cancelled: CancellationCallback | None = None,
+    export_diagnostics: bool = False,
+) -> ProcessingResult:
+    """Process one validated LS-5000 selector-8 Normal acquisition on CPU.
+
+    A caller-owned output is committed only after successful completion.
+    Validation errors and cancellation leave that buffer unchanged.
+    """
+
+    return _run_supported_job(
+        job,
+        output_rgb16=output_rgb16,
+        progress=progress,
+        cancelled=cancelled,
+        export_diagnostics=export_diagnostics,
+        derive_schedule=derive_producer_record_schedule,
+        run_replay=run_streaming_replay,
     )
 
 
