@@ -33,7 +33,7 @@ from ..engine import (
     _check_cancelled,
     _notify,
 )
-from ..output import emit_public_rgb16
+from ..output import InverseResponseFactors, emit_public_rgb16
 from ..prepass import reduce_prepass_frame
 from ..producer_parameters import ContentDerivedStageParameterProvider
 from ..profile import DEFAULT_PROFILE, ProcessingJob
@@ -291,7 +291,6 @@ def run_streaming_replay_fast(
     score_all = np.empty((height, width), dtype=np.float32)
     weighted_auxiliary_all = np.empty((height, width), dtype=np.float32)
     weighted_rgb_all = np.empty((height, width, 3), dtype=np.float32)
-    noop_all = np.empty((height, width, 3), dtype=np.uint16)
     for row in range(height):
         _check_cancelled(cancelled)
         analyzed = cache.get(row)
@@ -300,7 +299,10 @@ def run_streaming_replay_fast(
         score_all[row] = analyzed.score
         weighted_auxiliary_all[row] = analyzed.weighted_auxiliary
         weighted_rgb_all[row] = analyzed.weighted_rgb
-        noop_all[row] = emit_public_rgb16(analyzed.working[np.newaxis, :, :3])[0]
+
+    # The inverse-response factor tables are hash-checked on construction;
+    # build them once per replay instead of once per emit call.
+    factors = InverseResponseFactors.recovered_16bit()
 
     # Per-row resolved scalars (stage_parameter_provider only ever replaces
     # coarse_reference/driver_gate_secondary/row_reconstruction_gate; see
@@ -450,18 +452,27 @@ def run_streaming_replay_fast(
             band_written,
             band_advances,
         )
+        # Per-band emit: the digest consumes the same bytes in the same
+        # row-major order as a per-row accumulation, so it is unchanged.
+        band_slice = slice(y0, y0 + band_rows)
+        noop_band = emit_public_rgb16(working_all[band_slice, :, :3], factors=factors)
+        rendered_band = emit_public_rgb16(band_values[:band_rows], factors=factors)
+        output[band_slice] = rendered_band
+        output_hash.update(
+            rendered_band.astype("<u2", copy=False).tobytes(order="C")
+        )
+        changed += int(
+            np.count_nonzero(np.any(rendered_band != noop_band, axis=2))
+        )
         for i in range(band_rows):
             y = y0 + i
             attempted += int(band_attempted_counts[i])
             written += int(band_written[i])
             public_advances += int(band_advances[i])
-            noop = noop_all[y]
-            rendered = emit_public_rgb16(band_values[i][np.newaxis, :, :])[0]
-            output[y] = rendered
-            output_hash.update(rendered.astype("<u2", copy=False).tobytes(order="C"))
-            changed += int(np.count_nonzero(np.any(rendered != noop, axis=1)))
             if diagnostics_row is not None:
-                diagnostics_row(y, score_all[y], score_floor, rendered, noop)
+                diagnostics_row(
+                    y, score_all[y], score_floor, rendered_band[i], noop_band[i]
+                )
             if progress is not None:
                 progress(y + 1, height, attempted, written)
 
