@@ -1,13 +1,14 @@
 """Compiled per-pixel and per-row kernels for the optional cpu-fast backend.
 
 Every function here is a line-by-line port of the audited CPU reference in
-``streaming.py``, ``reconstruction.py``, and ``dither.py``: the same float64
-widening, float32 narrowing, and accumulation order, with no fastmath, no
-parallel reductions, and no reassociation.  The entry point is
-``process_row``, which fuses one whole output row -- decision eligibility,
-history-window boundary handling, feature records, candidates, combiner, and
-writer -- into a single compiled call; its helpers gather 9x9 patches
-directly from whole-image planes the caller builds once per run.
+``streaming.py``, ``reconstruction.py``, ``startup.py``, and ``dither.py``:
+the same float64 widening, float32 narrowing, and accumulation order, with
+no fastmath, no parallel reductions, and no reassociation.  The public-row
+entry points are ``analyze_band`` (the RNG-free analysis for one band of
+rows, parallelized with disjoint per-row writes) and ``write_band`` (the
+strictly serial conditional-dither writer that threads the LCG state);
+``startup_stage`` replays one hidden startup center.  Their helpers gather
+9x9 patches directly from whole-image planes the caller builds once per run.
 
 Importing this module requires numba.
 """
