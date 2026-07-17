@@ -418,6 +418,253 @@ def write_pixel_scalar(candidate, original, floor_enabled, low64, high64, low_lt
 
 
 # ---------------------------------------------------------------------------
+# Hidden startup replay (startup.replay_hidden_startup_rows).  The histories
+# are built by the reference's own _startup_histories helper (padded width,
+# pseudo-row and guard rules already materialized); this kernel walks one
+# hidden stage: the four decision bars on the raw auxiliary history, the
+# zero-record rule for logical rows at or below the first hidden center and
+# for out-of-row neighbors, the per-record fallback values (each neighbor's
+# producer stage differs), and the same candidate/combiner/writer chain as
+# the public rows against row zero's working RGB.
+# ---------------------------------------------------------------------------
+
+
+@njit(cache=True)
+def startup_feature_record(
+    score_history,
+    waux_history,
+    raw_aux_history,
+    logical_y,
+    x,
+    width,
+    guard,
+    minimum_y,
+    hidden_floor,
+    fallback,
+):
+    """startup._startup_feature_record: W/A records for one hidden center.
+
+    Ring slots for rows at or below the first hidden center retain allocator
+    zero, as do horizontal guards -- both weights and feature stay zero, not
+    fallback.
+    """
+
+    weights = np.zeros(4, dtype=np.float32)
+    feature = np.zeros(4, dtype=np.float32)
+    if logical_y <= hidden_floor or x < 0 or x >= width:
+        return weights, feature
+    center_row = logical_y - minimum_y
+    padded_x = x + guard
+    score_patch = score_history[
+        center_row - 4 : center_row + 5, padded_x - 4 : padded_x + 5
+    ]
+    waux_patch = waux_history[
+        center_row - 4 : center_row + 5, padded_x - 4 : padded_x + 5
+    ]
+    unrounded_weights = unscaled_averages_scalar(score_patch)
+    weights[0] = np.float32(unrounded_weights[0])
+    weights[1] = np.float32(unrounded_weights[1])
+    weights[2] = np.float32(unrounded_weights[2])
+    weights[3] = score_history[center_row, padded_x]
+    numerator = unscaled_averages_scalar(waux_patch)
+    for lane in range(3):
+        if unrounded_weights[lane] > 0.0:
+            feature[lane] = np.float32(numerator[lane] / unrounded_weights[lane])
+        else:
+            feature[lane] = fallback
+    if weights[3] > np.float32(0.0):
+        feature[3] = raw_aux_history[center_row, padded_x]
+    else:
+        feature[3] = fallback
+    return weights, feature
+
+
+@njit(cache=True)
+def startup_stage(
+    score_history,
+    waux_history,
+    wrgb_history,
+    raw_aux_history,
+    center_y,
+    minimum_y,
+    width,
+    writer_width,
+    guard,
+    hidden_floor,
+    radius,
+    threshold,
+    count_limit,
+    record_count,
+    fallback_center,
+    fallback_left,
+    fallback_right,
+    fallback_up,
+    fallback_down,
+    combiner_coarse_reference,
+    floor_enabled,
+    row_reconstruction_gate,
+    original_rgb_row,
+    coarse_enabled,
+    coarse_slopes,
+    band_enabled,
+    band_scales,
+    factors_a,
+    factors_b,
+    configured_strengths,
+    low64,
+    high64,
+    low_lt_high,
+    dither_scales,
+    state,
+):
+    """One hidden startup stage; returns (attempted, rng_advances, state)."""
+
+    center_row = center_y - minimum_y
+    attempted = 0
+    advances = np.int64(0)
+    features = np.zeros((5, 4), dtype=np.float32)
+    w3 = np.empty(3, dtype=np.float32)
+    for x in range(writer_width):
+        padded_x = x + guard
+        # The recovered four nine-sample decision bars on raw auxiliary
+        # history (x3a.DecisionOffsets.captured_normal_ls5000 layout).
+        decision_fallback = False
+        for group in range(4):
+            count = 0
+            for sample in range(9):
+                axis = sample - 4
+                if group == 0:
+                    dy = axis
+                    dx = -radius
+                elif group == 1:
+                    dy = -radius
+                    dx = axis
+                elif group == 2:
+                    dy = axis
+                    dx = radius
+                else:
+                    dy = radius
+                    dx = axis
+                if raw_aux_history[center_row + dy, padded_x + dx] < threshold:
+                    count += 1
+            if count > count_limit:
+                decision_fallback = True
+                break
+
+        weights, center_feature = startup_feature_record(
+            score_history,
+            waux_history,
+            raw_aux_history,
+            center_y,
+            x,
+            width,
+            guard,
+            minimum_y,
+            hidden_floor,
+            fallback_center,
+        )
+        if decision_fallback or driver_forces_fallback_scalar(
+            weights[3], row_reconstruction_gate, floor_enabled
+        ):
+            continue
+        attempted += 1
+        for lane in range(4):
+            features[0, lane] = center_feature[lane]
+        if record_count == 5:
+            _, feature_n = startup_feature_record(
+                score_history,
+                waux_history,
+                raw_aux_history,
+                center_y,
+                x - 1,
+                width,
+                guard,
+                minimum_y,
+                hidden_floor,
+                fallback_left,
+            )
+            for lane in range(4):
+                features[1, lane] = feature_n[lane]
+            _, feature_n = startup_feature_record(
+                score_history,
+                waux_history,
+                raw_aux_history,
+                center_y,
+                x + 1,
+                width,
+                guard,
+                minimum_y,
+                hidden_floor,
+                fallback_right,
+            )
+            for lane in range(4):
+                features[2, lane] = feature_n[lane]
+            _, feature_n = startup_feature_record(
+                score_history,
+                waux_history,
+                raw_aux_history,
+                center_y - 1,
+                x,
+                width,
+                guard,
+                minimum_y,
+                hidden_floor,
+                fallback_up,
+            )
+            for lane in range(4):
+                features[3, lane] = feature_n[lane]
+            _, feature_n = startup_feature_record(
+                score_history,
+                waux_history,
+                raw_aux_history,
+                center_y + 1,
+                x,
+                width,
+                guard,
+                minimum_y,
+                hidden_floor,
+                fallback_down,
+            )
+            for lane in range(4):
+                features[4, lane] = feature_n[lane]
+
+        wrgb_patch = wrgb_history[center_row - 4 : center_row + 5, x : x + 9]
+        w3[0] = weights[0]
+        w3[1] = weights[1]
+        w3[2] = weights[2]
+        candidates = rgb_candidates_scalar(wrgb_patch, w3)
+        combined = combine_candidate_scalar(
+            candidates[0],
+            candidates[1],
+            candidates[2],
+            original_rgb_row[x],
+            weights,
+            features,
+            record_count,
+            coarse_enabled,
+            combiner_coarse_reference,
+            coarse_slopes,
+            band_enabled,
+            band_scales,
+            factors_a,
+            factors_b,
+            configured_strengths,
+        )
+        _values, pixel_advances, state = write_pixel_scalar(
+            combined,
+            original_rgb_row[x],
+            floor_enabled,
+            low64,
+            high64,
+            low_lt_high,
+            dither_scales,
+            state,
+        )
+        advances += pixel_advances
+    return attempted, advances, state
+
+
+# ---------------------------------------------------------------------------
 # M2: whole-row fusion.  The scalar helpers above are the byte-exact per-
 # pixel chain (feature records, driver gate, candidates, combiner, writer).
 # The functions below replace the *gather* step -- instead of Python slicing

@@ -43,11 +43,16 @@ from ..stage_parameters import (
     validate_stage_calibration,
     writer_stage_for_row,
 )
+from ..startup import (
+    HIDDEN_CENTERS,
+    StartupReplayResult,
+    _startup_histories,
+    _validate_planes,
+)
 from ..streaming import (
     DiagnosticsRowCallback,
     StreamingReplayResult,
     _RowCache,
-    _startup_replay,
 )
 from ..x3a import (
     AuxiliaryParameters,
@@ -73,6 +78,140 @@ def _kernels():
 
 RowProgressCallback = Callable[[int, int, int, int], None]
 ProgressCallback = Callable[[object], None]
+
+
+def _startup_replay_fast(
+    kernels,
+    *,
+    working_all: np.ndarray,
+    auxiliary_all: np.ndarray,
+    score_all: np.ndarray,
+    width: int,
+    score_parameters: ScoreParameters,
+    decision_parameters: DecisionParameters,
+    reconstruction_parameters,
+    generator: LCG24,
+    stage_parameter_provider: StageParameterProvider | None,
+    cross_neighbor: bool,
+    coarse_slopes: np.ndarray,
+    band_enabled: np.ndarray,
+    band_scales: np.ndarray,
+    factors_a: np.ndarray,
+    factors_b: np.ndarray,
+    configured_strengths: np.ndarray,
+    dither_scales: np.ndarray,
+    low64: float,
+    high64: float,
+    low_lt_high: bool,
+) -> StartupReplayResult:
+    """Compiled mirror of ``startup.replay_hidden_startup_rows``.
+
+    Histories come from the reference's own ``_startup_histories`` helper;
+    per-stage calibration resolution replicates the reference's
+    ``reconstruction_parameters_for_stage`` closure, including the distinct
+    producer/neighbor stages that supply each feature record's fallback.
+    """
+
+    guard = 4
+    first_row_count = 5 if cross_neighbor else 4
+    available = min(first_row_count, working_all.shape[0])
+    rgb = np.ascontiguousarray(working_all[:available, :, :3])
+    auxiliary = np.ascontiguousarray(auxiliary_all[:available])
+    score = np.ascontiguousarray(score_all[:available])
+    rgb, auxiliary, score = _validate_planes(rgb, auxiliary, score)
+    if cross_neighbor and rgb.shape[0] < 5:
+        raise ValueError("cross-neighbor startup requires the first five real rows")
+    floor = np.float32(score_parameters.floor)
+    if not np.isfinite(floor) or floor <= np.float32(0.0):
+        raise ValueError("startup score floor must be finite and positive")
+    (
+        score_history,
+        weighted_auxiliary_history,
+        weighted_rgb_history,
+        raw_auxiliary_history,
+        minimum_y,
+    ) = _startup_histories(rgb, auxiliary, score, score_floor=floor, guard=guard)
+
+    def resolve(stage_hit: int):
+        if stage_parameter_provider is None:
+            return reconstruction_parameters
+        calibration = stage_parameter_provider(stage_hit)
+        validate_stage_calibration(calibration, expected_stage_hit=stage_hit)
+        return replace(
+            reconstruction_parameters,
+            coarse_reference=calibration.base_primary,
+            driver_gate_secondary=calibration.writer_gate_secondary,
+            row_reconstruction_gate=calibration.row_reconstruction_gate,
+        )
+
+    threshold = np.float32(decision_parameters.sample_threshold)
+    radius = int(decision_parameters.perpendicular_radius)
+    count_limit = int(decision_parameters.count_limit)
+    record_count = 5 if cross_neighbor else 1
+    coarse_enabled = bool(reconstruction_parameters.coarse_enabled)
+    original_rgb_row = np.ascontiguousarray(rgb[0])
+    attempted_per_stage: list[int] = []
+    advances_per_stage: list[int] = []
+    state = int(generator.state)
+
+    for center_y in HIDDEN_CENTERS:
+        stage_hit = center_y - HIDDEN_CENTERS[0] + 1
+        active = resolve(stage_hit)
+        producer_parameters = resolve(max(1, center_y + 6))
+        up_parameters = resolve(max(1, center_y + 5))
+        down_parameters = resolve(max(1, center_y + 7))
+        writer_width = (
+            width - 4 if cross_neighbor and stage_hit <= 2 else width
+        )
+        floor_enabled = bool(
+            active.driver_gate_primary or active.driver_gate_secondary
+        )
+        attempted, advances, state = kernels.startup_stage(
+            score_history,
+            weighted_auxiliary_history,
+            weighted_rgb_history,
+            raw_auxiliary_history,
+            center_y,
+            minimum_y,
+            width,
+            writer_width,
+            guard,
+            HIDDEN_CENTERS[0],
+            radius,
+            threshold,
+            count_limit,
+            record_count,
+            np.float32(producer_parameters.coarse_reference),
+            np.float32(producer_parameters.coarse_reference),
+            np.float32(producer_parameters.coarse_reference),
+            np.float32(up_parameters.coarse_reference),
+            np.float32(down_parameters.coarse_reference),
+            np.float32(active.coarse_reference),
+            floor_enabled,
+            int(active.row_reconstruction_gate),
+            original_rgb_row,
+            coarse_enabled,
+            coarse_slopes,
+            band_enabled,
+            band_scales,
+            factors_a,
+            factors_b,
+            configured_strengths,
+            low64,
+            high64,
+            low_lt_high,
+            dither_scales,
+            state,
+        )
+        attempted_per_stage.append(int(attempted))
+        advances_per_stage.append(int(advances))
+
+    generator.state = state
+    return StartupReplayResult(
+        attempted_per_stage=tuple(attempted_per_stage),  # type: ignore[arg-type]
+        rng_advances_per_stage=tuple(advances_per_stage),  # type: ignore[arg-type]
+        final_rng_state=state,
+    )
 
 
 def run_streaming_replay_fast(
@@ -125,16 +264,6 @@ def run_streaming_replay_fast(
         stage_parameter_provider=stage_parameter_provider,
     )
     active_generator = generator or LCG24.from_nikon_pe_initial_state()
-    startup = _startup_replay(
-        cache,
-        width=width,
-        score_parameters=score_parameters,
-        decision_parameters=decision_parameters,
-        reconstruction_parameters=reconstruction_parameters,
-        dither_bounds=dither_bounds,
-        generator=active_generator,
-        stage_parameter_provider=stage_parameter_provider,
-    )
     mode = feature_band_extrema_mode(
         resolution_metric=reconstruction_parameters.resolution_metric,
         cross_neighbor_cutoff=reconstruction_parameters.cross_neighbor_cutoff,
@@ -218,6 +347,30 @@ def run_streaming_replay_fast(
     low64 = float(np.float32(dither_bounds.low))
     high64 = float(np.float32(dither_bounds.high))
     low_lt_high = low64 < high64
+
+    startup = _startup_replay_fast(
+        kernels,
+        working_all=working_all,
+        auxiliary_all=auxiliary_all,
+        score_all=score_all,
+        width=width,
+        score_parameters=score_parameters,
+        decision_parameters=decision_parameters,
+        reconstruction_parameters=reconstruction_parameters,
+        generator=active_generator,
+        stage_parameter_provider=stage_parameter_provider,
+        cross_neighbor=cross_neighbor,
+        coarse_slopes=coarse_slopes,
+        band_enabled=band_enabled,
+        band_scales=band_scales,
+        factors_a=factors_a,
+        factors_b=factors_b,
+        configured_strengths=configured_strengths,
+        dither_scales=dither_scales,
+        low64=low64,
+        high64=high64,
+        low_lt_high=low_lt_high,
+    )
 
     attempted = 0
     written = 0
