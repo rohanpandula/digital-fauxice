@@ -19,6 +19,10 @@ import math
 import numpy as np
 from numba import njit, prange
 
+# These constants are baked into the on-disk compiled cache at first
+# compile; editing rng.py alone would NOT recompile the cached kernels.
+# engine._kernels() compares baked_constants() against the live values and
+# fails closed on any drift.
 from ..rng import LCG24_MASK, NIKON_NORMALIZATION
 
 # Reference coefficients are quantized to float32 once, then widened for every
@@ -26,6 +30,13 @@ from ..rng import LCG24_MASK, NIKON_NORMALIZATION
 _COEFF_69 = float(np.float32(1.0 / 69.0))
 _COEFF_21 = float(np.float32(1.0 / 21.0))
 _COEFF_16 = float(np.float32(1.0 / 16.0))
+
+
+@njit(cache=True)
+def baked_constants():
+    """Return the cross-module constants frozen into this compiled cache."""
+
+    return LCG24_MASK, NIKON_NORMALIZATION
 
 
 @njit(cache=True)

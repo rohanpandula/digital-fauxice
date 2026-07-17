@@ -22,6 +22,10 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
+# PRODUCER_BLOCK_SIZE and PRODUCER_CELL_WIDTH are baked into the on-disk
+# compiled cache at first compile; editing producer_parameters.py alone
+# would NOT recompile the cached kernels.  _check_cache_canary() compares
+# baked_constants() against the live values and fails closed on any drift.
 from ..producer_parameters import (
     PRODUCER_BLOCK_SIZE,
     PRODUCER_CELL_WIDTH,
@@ -47,6 +51,37 @@ FloatArray = npt.NDArray[np.float32]
 
 def _f32(value: float) -> np.float32:
     return np.float32(value)
+
+
+@njit(cache=True)
+def baked_constants():
+    """Return the cross-module constants frozen into this compiled cache."""
+
+    return PRODUCER_BLOCK_SIZE, PRODUCER_CELL_WIDTH
+
+
+_CACHE_CANARY_CHECKED = False
+
+
+def _check_cache_canary() -> None:
+    """Fail closed when the compiled cache disagrees with live constants."""
+
+    global _CACHE_CANARY_CHECKED
+    if _CACHE_CANARY_CHECKED:
+        return
+    baked_block, baked_cell = baked_constants()
+    if int(baked_block) != PRODUCER_BLOCK_SIZE or int(baked_cell) != (
+        PRODUCER_CELL_WIDTH
+    ):
+        from .engine import CpuFastUnavailable
+
+        raise CpuFastUnavailable(
+            "compiled producer cache is stale: baked block/cell sizes "
+            f"({int(baked_block)}, {int(baked_cell)}) disagree with the live "
+            f"values ({PRODUCER_BLOCK_SIZE}, {PRODUCER_CELL_WIDTH}); clear "
+            "the numba cache"
+        )
+    _CACHE_CANARY_CHECKED = True
 
 
 @njit(cache=True)
@@ -257,6 +292,7 @@ def derive_producer_mean_schedule_fast(
 ) -> ProducerMeanSchedule:
     """Compiled mirror of ``derive_producer_mean_schedule``."""
 
+    _check_cache_canary()
     pixels = np.asarray(rgbi16)
     if pixels.dtype != np.dtype(np.uint16):
         raise TypeError("producer RGBI input must have dtype uint16")

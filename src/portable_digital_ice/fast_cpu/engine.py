@@ -38,7 +38,7 @@ from ..prepass import reduce_prepass_frame
 from ..producer_parameters import ContentDerivedStageParameterProvider
 from ..profile import DEFAULT_PROFILE, ProcessingJob
 from ..reconstruction import FeatureBandExtremaMode, feature_band_extrema_mode
-from ..rng import LCG24
+from ..rng import LCG24, LCG24_MASK, NIKON_NORMALIZATION
 from ..stage_parameters import (
     StageParameterProvider,
     validate_stage_calibration,
@@ -67,13 +67,34 @@ class CpuFastUnavailable(RuntimeError):
     """The compiled CPU backend was requested but cannot run exactly here."""
 
 
-def _kernels():
-    """Import the njit kernel module lazily so package import stays numba-free."""
+_KERNEL_CANARY_CHECKED = False
 
+
+def _kernels():
+    """Import the njit kernel module lazily so package import stays numba-free.
+
+    Also verifies, once per process, that the constants frozen into the
+    on-disk compiled cache still equal the live reference values; a stale
+    cache fails closed instead of running with drifted constants.
+    """
+
+    global _KERNEL_CANARY_CHECKED
     try:
         from . import kernels
     except Exception as error:  # pragma: no cover - import environment
         raise CpuFastUnavailable(f"numba is not importable: {error!r}") from error
+    if not _KERNEL_CANARY_CHECKED:
+        baked_mask, baked_normalization = kernels.baked_constants()
+        if int(baked_mask) != LCG24_MASK or float(baked_normalization) != (
+            NIKON_NORMALIZATION
+        ):
+            raise CpuFastUnavailable(
+                "compiled kernel cache is stale: baked RNG constants "
+                f"({int(baked_mask):#x}, {float(baked_normalization)!r}) "
+                f"disagree with the live values ({LCG24_MASK:#x}, "
+                f"{NIKON_NORMALIZATION!r}); clear the numba cache"
+            )
+        _KERNEL_CANARY_CHECKED = True
     return kernels
 
 
