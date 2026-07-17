@@ -7,8 +7,10 @@ availability or speed: complete output, including every RGB16 byte, the
 changed-pixel accounting, the number of public RNG advances, and the final RNG state,
 compared sample by sample against this package's CPU reference on both
 complete validation frames, plus a 300-row crop receipt with
-cross-architecture agreement. All receipts are checked in under
-[`evidence/`](../evidence/) and bind the same source manifest of this tree.
+cross-architecture agreement. The receipts are checked in under
+[`evidence/`](../evidence/). The two complete-frame CUDA receipts bind this
+tree's current source manifest; `DERIVATION.md` records the ancestry and scope
+of the older public CPU and crop receipts.
 
 ## Install
 
