@@ -105,7 +105,9 @@ def test_cpu_diagnostic_masks_match_the_exact_run(
 
     expected_changed = np.any(result.output_rgb16 != _noop_rgb16(supported_job), axis=2)
     np.testing.assert_array_equal(diagnostics.changed_mask, expected_changed)
-    assert int(np.count_nonzero(diagnostics.changed_mask)) == result.replay.changed_pixels
+    assert (
+        int(np.count_nonzero(diagnostics.changed_mask)) == result.replay.changed_pixels
+    )
 
 
 def test_cpu_at_floor_mask_is_non_vacuous_and_uses_horizontal_minimum(
@@ -179,10 +181,9 @@ def test_cuda_diagnostics_match_cpu_and_preserve_output() -> None:
         cpu_with.diagnostics.score_plane.view(np.uint32),
         cuda_with.diagnostics.score_plane.view(np.uint32),
     )
-    assert (
-        cpu_with.diagnostics.score_floor.view(np.uint32)
-        == cuda_with.diagnostics.score_floor.view(np.uint32)
-    )
+    assert cpu_with.diagnostics.score_floor.view(
+        np.uint32
+    ) == cuda_with.diagnostics.score_floor.view(np.uint32)
     np.testing.assert_array_equal(
         cpu_with.diagnostics.at_floor_mask,
         cuda_with.diagnostics.at_floor_mask,
