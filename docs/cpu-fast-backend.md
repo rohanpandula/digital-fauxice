@@ -17,10 +17,15 @@ tree's current source manifest.
 python -m pip install -e '.[fast]'
 ```
 
-The `fast` extra installs numba. numba currently caps numpy below 2.5, so
-the effective combined requirement with this package is numpy 2.4.x; an
-incompatible pre-installed numpy surfaces as `CpuFastUnavailable` carrying
-the underlying import error in its message. The first cpu-fast run in a
+The `fast` extra installs numba, and accepts 0.65 or 0.66. The kernels use
+only `@njit`, `prange`, and plain numpy calls, so both versions compile the
+same code; the startup self-test proves byte parity against the reference
+backend on whichever one is installed. The floor sits at 0.65 so that an
+application already pinned there can use this backend without moving its own
+pin. numba currently caps numpy below 2.5, so the effective combined
+requirement with this package is numpy 2.4.x; an incompatible pre-installed
+numpy surfaces as `CpuFastUnavailable` carrying the underlying import error
+in its message. The first cpu-fast run in a
 process pays a one-time JIT compile or compile-cache load; the kernels are
 cached on disk (`cache=True`), and the startup self-test doubles as the
 warmup. Recorded per-frame times exclude that first-call cost.
