@@ -271,7 +271,7 @@ Measured on the two validation frames: 13 final synthesis components covering
 16,137 pixels (0.070727%) on frame 1, and 75 components covering 309,360
 pixels (1.355904%) on frame 2. Both passed my visual review on 2026-07-17. The
 policy, gates, and validation rules live in
-[`docs/hybrid-repair-agent-prompt.md`](docs/hybrid-repair-agent-prompt.md).
+[`docs/hybrid-repair-design.md`](docs/hybrid-repair-design.md).
 
 ### Repository map
 
@@ -285,7 +285,7 @@ policy, gates, and validation rules live in
 | `docs/input-contract.md` | Dual-RGBI acquisition and API requirements |
 | `docs/cuda-backend.md` | Deterministic CUDA backend and its binding receipts |
 | `docs/cpu-fast-backend.md` | Compiled CPU backend and its binding receipts |
-| `docs/hybrid-repair-agent-prompt.md` | Policy, gates, and validation rules for the optional hybrid mode |
+| `docs/hybrid-repair-design.md` | Policy, gates, and validation rules for the optional hybrid mode |
 
 ## License and names
 
