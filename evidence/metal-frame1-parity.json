@@ -37,7 +37,7 @@
   "determinism": {
     "consecutive_runs_identical": true
   },
-  "source_manifest_sha256": "ecb62ef436039802edb08a395ddbce9b474dd01ef2c531e3f83a3f7462fb2374",
+  "source_manifest_sha256": "aaac922e2c41fe683ee24a7161c06fa26c430f58e67da672ddb547a85941fa43",
   "source_manifest_file_count": 32,
   "metal_runtime": {
     "gpu": "Apple M4",
@@ -50,14 +50,14 @@
     "compile_options": "fastMathEnabled=False, mathMode=safe",
     "binary64_execution": "software IEEE-754 (integer arithmetic)",
     "elapsed_seconds_per_run": [
-      8.213,
-      9.927
+      8.018,
+      8.28
     ],
     "writer_chain_location": "host CPU, one core, via the compiled fast_cpu.kernels.write_band path (cuda_backend/host_writer.py), the same host writer the CUDA backend uses",
-    "load_note": "1-minute load average 11.4 on this 10-core machine during the gate; byte equality is load-independent, wall time is not"
+    "load_note": "1-minute load average 20.6 on this 10-core machine during the gate; byte equality is load-independent, wall time is not"
   },
   "cpu_fast_runtime": {
-    "elapsed_seconds": 14.041
+    "elapsed_seconds": 16.81
   },
   "stage_timings_note": "see docs/metal-backend.md for the stage table"
 }
