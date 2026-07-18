@@ -42,10 +42,11 @@ image happens to agree.
 
 The pure Python and NumPy reference takes roughly an hour per frame. It is
 deliberately a conservative research implementation. The optional CUDA backend
-produces byte-identical output in about 21 seconds on an NVIDIA RTX A4000, an
-optional compiled CPU backend does the same in about ten seconds on an Apple
-M4, and both fail closed rather than run in any configuration they cannot
-verify.
+produces byte-identical output in about 5.5 seconds on an NVIDIA RTX A4000
+(the sequential writer chain runs on one host CPU core through the same
+compiled path as the CPU backend below), an optional compiled CPU backend
+does the same in about ten seconds on an Apple M4, and both fail closed
+rather than run in any configuration they cannot verify.
 
 ## Optional AI repair for the worst damage
 

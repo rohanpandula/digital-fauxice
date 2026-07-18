@@ -67,16 +67,40 @@ startup replay (CPU Python) 1.7 s, all remaining kernels and transfers under
 
 ## Ranked next optimizations (measured, not yet implemented)
 
-1. Writer chain (18.5 s, 87%): a compiled sequential loop on one host CPU
-   core would run the same exact schedule roughly an order of magnitude
-   faster than one GPU thread, at the cost of adding a compiled extension or
-   an equivalent validated path; alternatively accept the current time.
+1. ~~Writer chain (18.5 s, 87%)~~ -- **landed 2026-07-17**, see below.
 2. Startup replay (1.7 s): same sequential math, currently reference Python;
    the same compiled-loop approach applies.
 3. Overlap producer/upload with prepass (about 0.3 s combined).
 
 Any change to these stages re-enters the ladder at Level 1 and must repass
 both complete-frame gates before the exact label applies again.
+
+## Update 2026-07-17: writer chain moved to the host CPU
+
+Ranked optimization 1 landed: `k_writer_chain` (the device kernel and its
+launch) is deleted, and the same sequential draw/redraw/floor schedule now
+runs on one host CPU core through the compiled `fast_cpu.kernels.write_band`
+path (`cuda_backend/host_writer.py` maps the GPU pipeline's per-selected-site
+attempted/candidate arrays onto it; it recomputes no reconstruction math).
+Validated byte-exact on both complete frames, 12/12 binding gates each,
+twice per frame for determinism, on the same A4000 lane.
+
+Measured consequence (A4000, complete native frame, warm):
+
+| | Before | After |
+|---|---:|---:|
+| Writer chain | 18.5 s | 2.7 - 2.9 s |
+| Total wall time | 21.2 - 21.5 s | 5.3 - 5.8 s |
+
+About 6.7x on the writer-chain stage itself, about 3.7-4.0x on the whole
+frame. Device-to-host transfer of the working plane and per-site arrays
+(about 1.1-1.2 s) is now the largest single piece of the writer-chain stage,
+ahead of the host computation itself (about 1.5-1.7 s); the upload of
+results back to the device is negligible (about 0.01 s). Peak device memory
+pool dropped slightly (2.08 GB -> 1.86 GB, a few small device buffers
+removed); peak host RSS rose (1.37 GB -> about 2.75 GB) because the host
+writer now materializes the full working plane and per-site candidate
+arrays once per frame. Ranked optimization 2 (startup replay) remains open.
 
 ## Independent translation review
 
