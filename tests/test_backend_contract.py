@@ -1,8 +1,8 @@
-"""Backend-selection contract: cpu exact, cuda/cpu-fast fail-closed, auto
-self-tested.
+"""Backend-selection contract: cpu exact, cuda/metal/cpu-fast fail-closed,
+auto self-tested.
 
-These tests run on every machine.  Where behavior depends on whether CUDA or
-numba is actually present, every leg is asserted explicitly.
+These tests run on every machine.  Where behavior depends on whether CUDA,
+Metal, or numba is actually present, every leg is asserted explicitly.
 """
 
 from __future__ import annotations
@@ -45,6 +45,20 @@ def _numba_present() -> bool:
         return False
 
 
+def _metal_present() -> bool:
+    """Mirror the Metal backend's real availability: device plus host writer."""
+
+    if not _numba_present():
+        return False
+    try:
+        from portable_digital_ice.metal_backend.engine import metal_device_summary
+
+        metal_device_summary()
+        return True
+    except Exception:
+        return False
+
+
 @contextmanager
 def _self_test_cache_snapshot():
     """Isolate self-test cache mutations so tests stay order-independent."""
@@ -82,6 +96,7 @@ def test_backend_enum_values():
     assert ComputeBackend.CPU.value == "cpu"
     assert ComputeBackend.CPU_FAST.value == "cpu-fast"
     assert ComputeBackend.CUDA.value == "cuda"
+    assert ComputeBackend.METAL.value == "metal"
 
 
 def test_cpu_backend_is_reference():
@@ -103,7 +118,12 @@ def test_unsupported_job_fails_before_backend_probe():
         bit_depth=job.bit_depth,
         focus_exposure_locked=True,
     )
-    for backend in (ComputeBackend.CPU, ComputeBackend.CUDA, ComputeBackend.AUTO):
+    for backend in (
+        ComputeBackend.CPU,
+        ComputeBackend.CUDA,
+        ComputeBackend.METAL,
+        ComputeBackend.AUTO,
+    ):
         with pytest.raises(ValueError):
             process(bad, backend=backend)
 
@@ -128,9 +148,14 @@ def test_auto_reports_reason_and_never_fails_closed():
     if _cuda_present():
         assert routed.selection.used is ComputeBackend.CUDA
         assert "self-test" in routed.selection.reason
+    elif _metal_present():
+        assert routed.selection.used is ComputeBackend.METAL
+        assert "CUDA unavailable" in routed.selection.reason
+        assert "Metal startup self-test passed byte parity" in routed.selection.reason
     elif _numba_present():
         assert routed.selection.used is ComputeBackend.CPU_FAST
         assert "CUDA unavailable" in routed.selection.reason
+        assert "Metal unavailable" in routed.selection.reason
         assert "self-test passed byte parity" in routed.selection.reason
         import numba
 
@@ -138,10 +163,131 @@ def test_auto_reports_reason_and_never_fails_closed():
     else:
         assert routed.selection.used is ComputeBackend.CPU
         assert "CUDA unavailable" in routed.selection.reason
+        assert "Metal unavailable" in routed.selection.reason
         assert "cpu-fast unavailable" in routed.selection.reason
         assert "using exact CPU reference" in routed.selection.reason
     cpu = process_cpu(_tiny_job())
     assert routed.result.replay.output_sha256 == cpu.replay.output_sha256
+
+
+def test_metal_request_fails_clearly_or_matches_cpu():
+    from portable_digital_ice.metal_backend.engine import MetalBackendUnavailable
+
+    job = _tiny_job()
+    if _metal_present():
+        routed = process(job, backend=ComputeBackend.METAL)
+        assert routed.selection.used is ComputeBackend.METAL
+        assert "self-test passed" in routed.selection.reason
+        cpu = process_cpu(_tiny_job())
+        assert routed.result.replay.output_sha256 == cpu.replay.output_sha256
+        assert routed.result.replay == cpu.replay
+    else:
+        with pytest.raises(MetalBackendUnavailable):
+            process(job, backend=ComputeBackend.METAL)
+
+
+def test_metal_string_request_is_accepted():
+    if not _metal_present():
+        pytest.skip("Metal backend is unavailable")
+    routed = process(_tiny_job(), backend="metal")
+    assert routed.selection.used is ComputeBackend.METAL
+
+
+def test_metal_self_test_outcome_is_cached(monkeypatch):
+    if not _metal_present():
+        pytest.skip("Metal backend is unavailable")
+    from portable_digital_ice import metal_backend
+
+    calls = {"n": 0}
+    real_process_metal = metal_backend.process_metal
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return real_process_metal(*args, **kwargs)
+
+    with _self_test_cache_snapshot() as cache:
+        cache.pop("metal-outcome", None)
+        monkeypatch.setattr(
+            "portable_digital_ice.metal_backend.process_metal", counting
+        )
+        backend_module.metal_self_test()
+        assert calls["n"] == 1
+        backend_module.metal_self_test()  # cached success: no rerun
+        assert calls["n"] == 1
+
+
+def test_metal_parity_comparison_catches_tampered_results(monkeypatch):
+    """The shared parity check must flag sample and diagnostics mismatches."""
+
+    if not _metal_present():
+        pytest.skip("Metal backend is unavailable")
+    from dataclasses import replace as dataclass_replace
+
+    from portable_digital_ice import metal_backend
+    from portable_digital_ice.metal_backend.engine import MetalBackendUnavailable
+
+    real_process_metal = metal_backend.process_metal
+
+    def tampered(*args, **kwargs):
+        result = real_process_metal(*args, **kwargs)
+        wrong_output = result.output_rgb16.copy()
+        wrong_output[0, 0, 0] ^= 1
+        assert result.diagnostics is not None
+        wrong_mask = result.diagnostics.at_floor_mask.copy()
+        wrong_mask[0, 0] = not wrong_mask[0, 0]
+        wrong_diagnostics = dataclass_replace(
+            result.diagnostics, at_floor_mask=wrong_mask
+        )
+        return dataclass_replace(
+            result, output_rgb16=wrong_output, diagnostics=wrong_diagnostics
+        )
+
+    with _self_test_cache_snapshot() as cache:
+        cache.pop("metal-outcome", None)
+        monkeypatch.setattr(
+            "portable_digital_ice.metal_backend.process_metal", tampered
+        )
+        with pytest.raises(MetalBackendUnavailable) as caught:
+            backend_module.metal_self_test()
+        assert "failed parity" in str(caught.value)
+        assert "output sample mismatch" in str(caught.value)
+        assert "at-floor mask mismatch" in str(caught.value)
+
+
+def test_metal_failure_is_cached_and_fails_closed(monkeypatch):
+    from portable_digital_ice.metal_backend.engine import MetalBackendUnavailable
+
+    calls = {"n": 0}
+
+    def broken(*args, **kwargs):
+        calls["n"] += 1
+        raise MetalBackendUnavailable("Metal is not usable: injected for test")
+
+    with _self_test_cache_snapshot() as cache:
+        cache.pop("metal-outcome", None)
+        monkeypatch.setattr(
+            "portable_digital_ice.metal_backend.process_metal", broken
+        )
+        with pytest.raises(MetalBackendUnavailable):
+            process(_tiny_job(), backend=ComputeBackend.METAL)
+        assert calls["n"] == 1
+        # The failure outcome is cached: later calls raise without rerunning.
+        with pytest.raises(MetalBackendUnavailable) as second:
+            process(_tiny_job(), backend=ComputeBackend.METAL)
+        assert calls["n"] == 1
+        assert "Metal is not usable" in str(second.value)
+        # AUTO records the fallthrough reason and still returns exact output.
+        routed = process(_tiny_job(), backend=ComputeBackend.AUTO)
+        if _cuda_present():
+            assert routed.selection.used is ComputeBackend.CUDA
+        elif _numba_present():
+            assert routed.selection.used is ComputeBackend.CPU_FAST
+            assert "Metal unavailable" in routed.selection.reason
+        else:
+            assert routed.selection.used is ComputeBackend.CPU
+            assert "Metal unavailable" in routed.selection.reason
+        cpu = process_cpu(_tiny_job())
+        assert routed.result.replay.output_sha256 == cpu.replay.output_sha256
 
 
 def test_cpu_fast_request_matches_cpu_or_fails_clearly():
@@ -292,13 +438,17 @@ def test_cpu_fast_failure_is_cached_and_fails_closed(monkeypatch):
             process(_tiny_job(), backend=ComputeBackend.CPU_FAST)
         assert calls["n"] == 1
         assert "numba is not importable" in str(second.value)
-        # AUTO records both fallthrough reasons and still returns exact output.
+        # AUTO records every fallthrough reason and still returns exact output.
         routed = process(_tiny_job(), backend=ComputeBackend.AUTO)
         if _cuda_present():
             assert routed.selection.used is ComputeBackend.CUDA
+        elif _metal_present():
+            assert routed.selection.used is ComputeBackend.METAL
+            assert "CUDA unavailable" in routed.selection.reason
         else:
             assert routed.selection.used is ComputeBackend.CPU
             assert "CUDA unavailable" in routed.selection.reason
+            assert "Metal unavailable" in routed.selection.reason
             assert "cpu-fast unavailable" in routed.selection.reason
         cpu = process_cpu(_tiny_job())
         assert routed.result.replay.output_sha256 == cpu.replay.output_sha256
