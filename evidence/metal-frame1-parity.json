@@ -1,0 +1,63 @@
+{
+  "schema": "portable-digital-ice-metal-parity-receipt-v1",
+  "status": "PASS",
+  "claim": "Metal backend byte parity with the CPU reference of this package, complete native 4000 frame (validation frame1), established in-process against the compiled cpu-fast backend and bound to the pinned CPU-reference output of the checked-in receipts",
+  "parity_baseline": "compared bitwise in-process against ComputeBackend.CPU_FAST (output bytes, all counters, RNG accounting, startup receipt, and the three diagnostics planes); the output hash equals the CPU-reference hash pinned by the cuda and cpu-fast receipts for this fixture, and output plus all three diagnostics planes equal the archived full-frame export of the completed CUDA gate bitwise, so the chain to the CPU reference is hash-transitive on identical input bytes",
+  "geometry_hwc": [
+    5782,
+    3946,
+    3
+  ],
+  "compared_rgb16_samples": 68447316,
+  "mismatch_samples": 0,
+  "mismatch_pixels": 0,
+  "maximum_absolute_delta": 0,
+  "absolute_delta_sum": 0,
+  "diagnostics_planes_equal": true,
+  "cpu_fast_and_metal_output_sha256": "c3ee49f49f71cbc544da595901522d945f549464f0f3b9a543e98171e56f6ad7",
+  "attempted_pixels": 6883933,
+  "written_pixels": 6431211,
+  "changed_pixels": 6426156,
+  "public_rng_advances": 34596507,
+  "final_rng_state": 8880392,
+  "startup_rng_advances_per_stage": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "main_fixture_sha256": "368a9fdb230ee8d6ed88b3c30e7f22c947051a3a62d4e4f22043cc02e7c3275e",
+  "prepass_fixture_sha256": "3756c15e20a396189392b86db1c2172e117f5d45abd25964d11740ce3c72934a",
+  "main_rgbi16_raw_byte_sha256": "542832fa404572a2460968bc2bc585f0c7595d06eaab6a319bb26a87b3536551",
+  "prepass_rgbi16_raw_byte_sha256": "3b5a091ccad3f9f783b0e8bb78221d49b1b77bad55feaa66d88cd240cb35b2db",
+  "gate_checks_passed": 26,
+  "gate_checks_total": 26,
+  "determinism": {
+    "consecutive_runs_identical": true
+  },
+  "source_manifest_sha256": "ecb62ef436039802edb08a395ddbce9b474dd01ef2c531e3f83a3f7462fb2374",
+  "source_manifest_file_count": 32,
+  "metal_runtime": {
+    "gpu": "Apple M4",
+    "machine": "arm64",
+    "os": "macOS 26.5.2",
+    "python": "3.13.5",
+    "numpy": "2.4.6",
+    "numba": "0.66.0",
+    "pyobjc": "12.2.1",
+    "compile_options": "fastMathEnabled=False, mathMode=safe",
+    "binary64_execution": "software IEEE-754 (integer arithmetic)",
+    "elapsed_seconds_per_run": [
+      8.213,
+      9.927
+    ],
+    "writer_chain_location": "host CPU, one core, via the compiled fast_cpu.kernels.write_band path (cuda_backend/host_writer.py), the same host writer the CUDA backend uses",
+    "load_note": "1-minute load average 11.4 on this 10-core machine during the gate; byte equality is load-independent, wall time is not"
+  },
+  "cpu_fast_runtime": {
+    "elapsed_seconds": 14.041
+  },
+  "stage_timings_note": "see docs/metal-backend.md for the stage table"
+}
