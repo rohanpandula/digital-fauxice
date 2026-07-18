@@ -8,8 +8,12 @@ recorded store boundary.  The kernels reproduce that schedule literally:
 - compiled with ``--fmad=false`` so multiply/add pairs never contract;
 - no fast-math, no reciprocal approximations, no reordered reductions;
 - float64 -> float32 narrowing uses the default round-to-nearest-even cast;
-- the 24-bit LCG and conditional-dither writer run as one sequential thread
-  because the number of draws a site consumes depends on the drawn values.
+- the 24-bit LCG and conditional-dither writer are sequential by necessity
+  (the number of draws a site consumes depends on the drawn values) and run
+  on one host CPU core via the compiled ``fast_cpu`` path
+  (``cuda_backend/host_writer.py``) instead of one device thread; the
+  ``dither_delta`` device function stays here as a validated primitive only,
+  no longer reachable from any kernel this module compiles.
 
 Numeric constants that the CPU reference derives by quantizing Python floats
 to float32 (for example ``float32(1/69)``) are injected from host Python as
@@ -499,9 +503,15 @@ extern "C" __global__ void k_features_and_combine(
 }
 
 // ---------------------------------------------------------------------------
-// stage 5: the sequential conditional-dither writer chain.
-// One thread owns the whole chain: draw consumption depends on drawn values,
-// so this is the exact recovered order, not a parallel approximation.
+// stage 5 (host): the sequential conditional-dither writer chain now runs on
+// one host CPU core through the compiled fast_cpu.kernels.write_band path
+// (cuda_backend/host_writer.py) -- it was sequential by necessity (draw
+// consumption depends on drawn values) and a single device thread paid an
+// order of magnitude more wall time for the same schedule than one host
+// core.  dither_delta stays here, unused by any remaining kernel, as the
+// validated primitive tests/test_cuda_level1_primitives.py still checks
+// bit-for-bit against dither.conditional_dither_delta -- a standing guard
+// against the device and host math ever drifting apart.
 // ---------------------------------------------------------------------------
 
 __device__ __forceinline__ double dither_delta(
@@ -523,66 +533,6 @@ __device__ __forceinline__ double dither_delta(
   double changed = candidate + delta;
   if (low < changed && changed < high) return delta;
   return 0.0;
-}
-
-extern "C" __global__ void k_writer_chain(
-    const i64* __restrict__ selected, i64 selected_count,
-    const u8* __restrict__ attempted, const double* __restrict__ candidate,
-    const float* __restrict__ original, const u8* __restrict__ floor_enabled,
-    int W, u32 state_in, float low32, float high32, float dither_scale_r,
-    float dither_scale_g, float dither_scale_b, float* __restrict__ values,
-    u8* __restrict__ written, u64* __restrict__ advances_out,
-    u32* __restrict__ state_out) {
-  if (blockIdx.x != 0 || threadIdx.x != 0) return;
-  u32 state = state_in;
-  u64 advances = 0;
-  const double low = (double)low32;
-  const double high = (double)high32;
-  const bool low_lt_high = low < high;
-  const float scales[3] = {dither_scale_r, dither_scale_g, dither_scale_b};
-  for (i64 i = 0; i < selected_count; ++i) {
-    float out[3];
-    out[0] = original[i * 3 + 0];
-    out[1] = original[i * 3 + 1];
-    out[2] = original[i * 3 + 2];
-    if (attempted[i]) {
-      double rebuilt[3] = {candidate[i * 3 + 0], candidate[i * 3 + 1],
-                           candidate[i * 3 + 2]};
-      bool valid = isfinite(rebuilt[0]) && isfinite(rebuilt[1]) &&
-                   isfinite(rebuilt[2]) && rebuilt[0] > 0.0 &&
-                   rebuilt[1] > 0.0 && rebuilt[2] > 0.0;
-      if (valid) {
-        int y = (int)(selected[i] / W);
-        bool floor_on = floor_enabled[y] != 0;
-        for (int channel = 0; channel < 3; ++channel) {
-          double first_delta = dither_delta(rebuilt[channel], low, high,
-                                            low_lt_high, scales[channel],
-                                            &state, &advances);
-          if (floor_on && rebuilt[channel] + first_delta <=
-                              (double)original[i * 3 + channel]) {
-            out[channel] = original[i * 3 + channel];
-          } else {
-            double delta = first_delta;
-            if (floor_on) {
-              delta = dither_delta(rebuilt[channel], low, high, low_lt_high,
-                                   scales[channel], &state, &advances);
-            }
-            out[channel] = (float)(rebuilt[channel] + delta);
-          }
-        }
-      }
-    }
-    values[i * 3 + 0] = out[0];
-    values[i * 3 + 1] = out[1];
-    values[i * 3 + 2] = out[2];
-    written[i] = (out[0] != original[i * 3 + 0] ||
-                  out[1] != original[i * 3 + 1] ||
-                  out[2] != original[i * 3 + 2])
-                     ? 1
-                     : 0;
-  }
-  *advances_out = advances;
-  *state_out = state;
 }
 
 // ---------------------------------------------------------------------------

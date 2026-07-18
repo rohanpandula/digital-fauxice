@@ -31,8 +31,8 @@
   "prepass_fixture_sha256": "3756c15e20a396189392b86db1c2172e117f5d45abd25964d11740ce3c72934a",
   "gate_checks_passed": 12,
   "gate_checks_total": 12,
-  "source_manifest_sha256": "82492bd3d79dca3932b393a50873baa5dcf353597c56df7684b1d8534a070f67",
-  "canonical_private_receipt_sha256": "5088dcde3332f1410bc85d75fd2be5507d24536fc6dc6a4f3592f001f88e8400",
+  "source_manifest_sha256": "b89a62321978a649f2bb0c94c1e6816c741264ac39f49ca62643aa5b40c08f5c",
+  "canonical_private_receipt_sha256": "dfe4a0b4e0190ccdb1a3db05f964d6a6717dc1a14336a8e35615604c6a6b16e0",
   "cuda_runtime": {
     "gpu": "NVIDIA RTX A4000",
     "compute_capability": "8.6",
@@ -44,9 +44,10 @@
       "--std=c++17"
     ],
     "python": "3.12.3",
-    "numpy": "2.5.1",
+    "numpy": "2.4.6",
     "container": "nvidia/cuda:12.6.3-devel-ubuntu24.04 (Docker, NVIDIA runtime)",
-    "elapsed_seconds": 22.796
+    "elapsed_seconds": 6.314,
+    "writer_chain_location": "host CPU, one core, via the compiled fast_cpu.kernels.write_band path (cuda_backend/host_writer.py); previously one sequential device thread (k_writer_chain, removed)"
   },
   "cpu_reference_runtime": {
     "machine": "arm64",

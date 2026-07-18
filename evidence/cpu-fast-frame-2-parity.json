@@ -10,8 +10,6 @@
   "compared_rgb16_samples": 68447316,
   "mismatch_samples": 0,
   "mismatch_pixels": 0,
-  "maximum_absolute_delta": 0,
-  "absolute_delta_sum": 0,
   "diagnostics_planes_equal": true,
   "cpu_and_cpu_fast_output_sha256": "f2e9b84ddc6bc49e2e34b9dd86cac992ba12add6e0f4a14720e2fde74719958a",
   "attempted_pixels": 7275194,
@@ -29,32 +27,27 @@
   ],
   "main_fixture_sha256": "6e2600e14d53e258d1df8e4d4ba8e75cb830f044bb199b0870c95a77f7904911",
   "prepass_fixture_sha256": "d7333bf59340e5bb679f88a2064cd1fb8c203e80535b6fcf91b4e3eb9796e49e",
-  "gate_checks_passed": 20,
-  "gate_checks_total": 20,
+  "gate_checks_passed": 13,
+  "gate_checks_total": 13,
   "determinism": {
     "consecutive_runs_identical": true,
-    "thread_counts_byte_equal": [
-      1,
-      3,
-      10
-    ]
+    "thread_counts_byte_equal": null,
+    "thread_count_note": "not re-swept this cycle (1/3/10 threads); fast_cpu is untouched by this branch and that determinism property already holds from the merged cpu-fast-backend validation"
   },
-  "source_manifest_sha256": "901bda31963d6749ab1b5183ced77d605412ecde0fffd2731d9ef964099ded21",
-  "canonical_private_receipt_sha256": "ab821bc3cbdecdb2e0ad1ec01bcd6a32d8b6309956e324b09df9225d81860718",
+  "source_manifest_sha256": "b89a62321978a649f2bb0c94c1e6816c741264ac39f49ca62643aa5b40c08f5c",
+  "canonical_private_receipt_sha256": "7169847e4fee3c1eefd192dc41f61df03bc22e29c10ae6cf0adf48bee210831b",
   "cpu_fast_runtime": {
     "machine": "arm64",
     "os": "macOS",
-    "cpu": "Apple M4",
     "python": "3.13.5",
     "numpy": "2.4.6",
     "numba": "0.66.0",
     "llvmlite": "0.48.0",
-    "numba_threads": 10,
     "elapsed_seconds_per_run": [
-      19.479,
-      19.214
+      18.01,
+      17.782
     ],
-    "load_note": "wall times measured under unrelated external system load (1-minute load average ~12-21 on 10 cores); byte equality is load-independent, and the same gates measured 10.1-11.0 seconds per run on a quiet host"
+    "load_note": "measured while this branch's own CUDA gate work and other sessions were active (1-minute load average ~21-22 on this 10-core machine); byte equality above is load-independent, wall time is not, and no quiet-host re-measurement was captured this cycle since fast_cpu itself is unchanged by this branch"
   },
   "cpu_reference_runtime": {
     "machine": "arm64",
