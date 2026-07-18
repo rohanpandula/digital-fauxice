@@ -1,0 +1,66 @@
+{
+  "schema": "portable-digital-ice-cpu-fast-parity-receipt-v1",
+  "status": "PASS",
+  "claim": "Compiled CPU (cpu-fast) backend byte parity with the CPU reference of this package, complete native 4000 frame (independent validation frame 2)",
+  "geometry_hwc": [
+    5782,
+    3946,
+    3
+  ],
+  "compared_rgb16_samples": 68447316,
+  "mismatch_samples": 0,
+  "mismatch_pixels": 0,
+  "maximum_absolute_delta": 0,
+  "absolute_delta_sum": 0,
+  "diagnostics_planes_equal": true,
+  "cpu_and_cpu_fast_output_sha256": "f2e9b84ddc6bc49e2e34b9dd86cac992ba12add6e0f4a14720e2fde74719958a",
+  "attempted_pixels": 7275194,
+  "written_pixels": 6720504,
+  "changed_pixels": 6718151,
+  "public_rng_advances": 36383248,
+  "final_rng_state": 16418997,
+  "startup_rng_advances_per_stage": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "main_fixture_sha256": "6e2600e14d53e258d1df8e4d4ba8e75cb830f044bb199b0870c95a77f7904911",
+  "prepass_fixture_sha256": "d7333bf59340e5bb679f88a2064cd1fb8c203e80535b6fcf91b4e3eb9796e49e",
+  "gate_checks_passed": 20,
+  "gate_checks_total": 20,
+  "determinism": {
+    "consecutive_runs_identical": true,
+    "thread_counts_byte_equal": [
+      1,
+      3,
+      10
+    ]
+  },
+  "source_manifest_sha256": "901bda31963d6749ab1b5183ced77d605412ecde0fffd2731d9ef964099ded21",
+  "canonical_private_receipt_sha256": "ab821bc3cbdecdb2e0ad1ec01bcd6a32d8b6309956e324b09df9225d81860718",
+  "cpu_fast_runtime": {
+    "machine": "arm64",
+    "os": "macOS",
+    "cpu": "Apple M4",
+    "python": "3.13.5",
+    "numpy": "2.4.6",
+    "numba": "0.66.0",
+    "llvmlite": "0.48.0",
+    "numba_threads": 10,
+    "elapsed_seconds_per_run": [
+      19.479,
+      19.214
+    ],
+    "load_note": "wall times measured under unrelated external system load (1-minute load average ~12-21 on 10 cores); byte equality is load-independent, and the same gates measured 10.1-11.0 seconds per run on a quiet host"
+  },
+  "cpu_reference_runtime": {
+    "machine": "arm64",
+    "os": "macOS",
+    "python": "3.13.5",
+    "numpy": "2.5.1",
+    "elapsed_seconds": 4183.442
+  }
+}

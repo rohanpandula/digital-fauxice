@@ -2,9 +2,12 @@
 
 ``cpu`` always selects the exact validated reference.  ``cuda`` requires a
 usable CUDA device and raises with a specific reason otherwise; it never
-silently substitutes another implementation.  ``auto`` selects CUDA only after
-a startup self-test reproduces the CPU reference byte-for-byte on a synthetic
-acquisition, and otherwise falls back to CPU while reporting why.
+silently substitutes another implementation.  ``cpu-fast`` requires the
+optional compiled CPU backend (numba) and likewise raises with a specific
+reason when it cannot run exactly.  ``auto`` tries CUDA first, then cpu-fast,
+then the CPU reference; each candidate must first reproduce the CPU reference
+byte-for-byte on a synthetic acquisition, and every fallthrough reason is
+reported in ``BackendSelection.reason``.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from .profile import ProcessingJob, ProcessingMode, ScannerModel
 class ComputeBackend(StrEnum):
     AUTO = "auto"
     CPU = "cpu"
+    CPU_FAST = "cpu-fast"
     CUDA = "cuda"
 
 
@@ -80,12 +84,67 @@ def _synthetic_self_test_job() -> ProcessingJob:
     )
 
 
+def _parity_failures(cpu, candidate, label: str) -> list[str]:
+    """Compare one candidate backend's result against the CPU reference.
+
+    Covers output hash, every output sample, the five replay counters, and
+    the three diagnostics planes (plus the score floor) bitwise.  Both
+    results must come from runs with ``export_diagnostics=True``.
+    """
+
+    failures: list[str] = []
+    if cpu.replay.output_sha256 != candidate.replay.output_sha256:
+        failures.append(
+            "output hash mismatch "
+            f"cpu={cpu.replay.output_sha256} {label}={candidate.replay.output_sha256}"
+        )
+    if not np.array_equal(cpu.output_rgb16, candidate.output_rgb16):
+        failures.append("output sample mismatch")
+    for field in (
+        "attempted_pixels",
+        "written_pixels",
+        "public_rng_advances",
+        "final_rng_state",
+        "changed_pixels",
+    ):
+        cpu_value = getattr(cpu.replay, field)
+        candidate_value = getattr(candidate.replay, field)
+        if cpu_value != candidate_value:
+            failures.append(
+                f"{field} mismatch cpu={cpu_value} {label}={candidate_value}"
+            )
+    cpu_diagnostics = cpu.diagnostics
+    candidate_diagnostics = candidate.diagnostics
+    if cpu_diagnostics is None or candidate_diagnostics is None:
+        failures.append("diagnostics planes missing from self-test run")
+    else:
+        if not np.array_equal(
+            cpu_diagnostics.score_plane.view(np.uint32),
+            candidate_diagnostics.score_plane.view(np.uint32),
+        ):
+            failures.append("score plane mismatch")
+        if cpu_diagnostics.score_floor.view(np.uint32) != (
+            candidate_diagnostics.score_floor.view(np.uint32)
+        ):
+            failures.append("score floor mismatch")
+        if not np.array_equal(
+            cpu_diagnostics.at_floor_mask, candidate_diagnostics.at_floor_mask
+        ):
+            failures.append("at-floor mask mismatch")
+        if not np.array_equal(
+            cpu_diagnostics.changed_mask, candidate_diagnostics.changed_mask
+        ):
+            failures.append("changed mask mismatch")
+    return failures
+
+
 def cuda_self_test() -> None:
     """Prove CUDA/CPU byte parity on the synthetic job or raise.
 
     The comparison covers output bytes, the RNG advance count, the final RNG
-    state, and all writer counters.  The (successful or failed) outcome is
-    cached per process; a failure reason is re-raised on later calls.
+    state, all writer counters, and the three diagnostics planes bitwise.
+    The (successful or failed) outcome is cached per process; a failure
+    reason is re-raised on later calls.
     """
 
     cached = _SELF_TEST_CACHE.get("outcome", "unset")
@@ -98,27 +157,9 @@ def cuda_self_test() -> None:
         from .cuda_backend import process_cuda
 
         job = _synthetic_self_test_job()
-        cpu = process_cpu(job)
-        gpu = process_cuda(job)
-        failures: list[str] = []
-        if cpu.replay.output_sha256 != gpu.replay.output_sha256:
-            failures.append(
-                "output hash mismatch "
-                f"cpu={cpu.replay.output_sha256} cuda={gpu.replay.output_sha256}"
-            )
-        if not np.array_equal(cpu.output_rgb16, gpu.output_rgb16):
-            failures.append("output sample mismatch")
-        for field in (
-            "attempted_pixels",
-            "written_pixels",
-            "public_rng_advances",
-            "final_rng_state",
-            "changed_pixels",
-        ):
-            cpu_value = getattr(cpu.replay, field)
-            gpu_value = getattr(gpu.replay, field)
-            if cpu_value != gpu_value:
-                failures.append(f"{field} mismatch cpu={cpu_value} cuda={gpu_value}")
+        cpu = process_cpu(job, export_diagnostics=True)
+        gpu = process_cuda(job, export_diagnostics=True)
+        failures = _parity_failures(cpu, gpu, "cuda")
         if failures:
             reason = "CUDA self-test failed parity: " + "; ".join(failures)
             _SELF_TEST_CACHE["outcome"] = reason
@@ -134,6 +175,54 @@ def raise_from_reason(reason: str) -> None:
     from .cuda_backend.engine import CudaBackendUnavailable
 
     raise CudaBackendUnavailable(reason)
+
+
+def _raise_cpu_fast_from_reason(reason: str) -> None:
+    from .fast_cpu import CpuFastUnavailable
+
+    raise CpuFastUnavailable(reason)
+
+
+def _numba_version() -> str:
+    import numba
+
+    return numba.__version__
+
+
+def cpu_fast_self_test() -> None:
+    """Prove cpu-fast/CPU byte parity on the synthetic job or raise.
+
+    The comparison covers output bytes, the RNG advance count, the final RNG
+    state, all writer counters, and the three diagnostics planes bitwise.
+    The (successful or failed) outcome is cached per process; a failure
+    reason is re-raised on later calls.  A passing self-test also serves as
+    the compiled path's warmup.
+    """
+
+    cached = _SELF_TEST_CACHE.get("cpu-fast-outcome", "unset")
+    if cached is None:
+        return
+    if cached != "unset":
+        _raise_cpu_fast_from_reason(str(cached))
+
+    try:
+        from .fast_cpu import process_cpu_fast
+
+        job = _synthetic_self_test_job()
+        cpu = process_cpu(job, export_diagnostics=True)
+        fast = process_cpu_fast(job, export_diagnostics=True)
+        failures = _parity_failures(cpu, fast, "cpu-fast")
+        if failures:
+            reason = "cpu-fast self-test failed parity: " + "; ".join(failures)
+            _SELF_TEST_CACHE["cpu-fast-outcome"] = reason
+            _raise_cpu_fast_from_reason(reason)
+    except Exception as error:
+        if _SELF_TEST_CACHE.get("cpu-fast-outcome", "unset") == "unset":
+            _SELF_TEST_CACHE["cpu-fast-outcome"] = (
+                f"cpu-fast self-test raised: {error!r}"
+            )
+        raise
+    _SELF_TEST_CACHE["cpu-fast-outcome"] = None
 
 
 def process(
@@ -166,6 +255,27 @@ def process(
             BackendSelection(requested, ComputeBackend.CPU, "explicit CPU request"),
         )
 
+    if requested is ComputeBackend.CPU_FAST:
+        cpu_fast_self_test()
+        from .fast_cpu import process_cpu_fast
+
+        result = process_cpu_fast(
+            job,
+            output_rgb16=output_rgb16,
+            progress=progress,
+            cancelled=cancelled,
+            export_diagnostics=export_diagnostics,
+        )
+        return BackendProcessingResult(
+            result,
+            BackendSelection(
+                requested,
+                ComputeBackend.CPU_FAST,
+                "explicit cpu-fast request; self-test passed byte parity "
+                f"(numba {_numba_version()})",
+            ),
+        )
+
     if requested is ComputeBackend.CUDA:
         cuda_self_test()
         from .cuda_backend import process_cuda
@@ -184,11 +294,32 @@ def process(
             ),
         )
 
-    # AUTO
+    # AUTO: CUDA first, then cpu-fast, then the exact CPU reference.
     try:
         cuda_self_test()
-    except Exception as error:
-        result = process_cpu(
+    except Exception as cuda_error:
+        try:
+            cpu_fast_self_test()
+        except Exception as cpu_fast_error:
+            result = process_cpu(
+                job,
+                output_rgb16=output_rgb16,
+                progress=progress,
+                cancelled=cancelled,
+                export_diagnostics=export_diagnostics,
+            )
+            return BackendProcessingResult(
+                result,
+                BackendSelection(
+                    requested,
+                    ComputeBackend.CPU,
+                    f"CUDA unavailable ({cuda_error}); cpu-fast unavailable "
+                    f"({cpu_fast_error}); using exact CPU reference",
+                ),
+            )
+        from .fast_cpu import process_cpu_fast
+
+        result = process_cpu_fast(
             job,
             output_rgb16=output_rgb16,
             progress=progress,
@@ -199,8 +330,9 @@ def process(
             result,
             BackendSelection(
                 requested,
-                ComputeBackend.CPU,
-                f"CUDA unavailable, using exact CPU reference: {error}",
+                ComputeBackend.CPU_FAST,
+                f"CUDA unavailable ({cuda_error}); cpu-fast startup self-test "
+                f"passed byte parity (numba {_numba_version()})",
             ),
         )
     from .cuda_backend import process_cuda
@@ -225,6 +357,7 @@ __all__ = [
     "BackendSelection",
     "ComputeBackend",
     "ProcessingDiagnostics",
+    "cpu_fast_self_test",
     "cuda_self_test",
     "process",
 ]
