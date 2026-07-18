@@ -13,9 +13,9 @@ and external `big-lama.pt` SHA-256
 `344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9`.
 The model file is not included. The archived receipt binds hybrid source
 manifest
-`00e1135fc8cbc6f11fe2feb7c9de6a5daf16cabadbcf8cdd2159176daba4fae3`
+`2d765b0de5ef53e567909f1295d5139065e2a30494e58042cc5207b9c18e4729`
 and has SHA-256
-`1c2eb226f5e891d8fc0ddabc3d8577d79f97a8cd96e87249197a8ed4dcbd00a0`.
+`799ce21b54637b4d6da27ad518ef05d69e467c9488f78d1e37764e8db4fbe337`.
 
 An independent same-environment repeat produced identical file hashes for the
 pure output, hybrid output, synthesis mask, component input, component mask,

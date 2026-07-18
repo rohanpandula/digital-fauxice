@@ -228,7 +228,7 @@ wheels = [
 
 [[package]]
 name = "portable-digital-ice"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "../" }
 dependencies = [
     { name = "numpy" },
@@ -244,12 +244,14 @@ requires-dist = [
     { name = "cupy-cuda12x", marker = "extra == 'cuda'", specifier = ">=13" },
     { name = "numba", marker = "extra == 'cuda'", specifier = ">=0.65,<0.68" },
     { name = "numba", marker = "extra == 'fast'", specifier = ">=0.65,<0.68" },
+    { name = "numba", marker = "extra == 'metal'", specifier = ">=0.65,<0.68" },
     { name = "numpy", specifier = ">=2.4,<3" },
+    { name = "pyobjc-framework-metal", marker = "extra == 'metal'", specifier = ">=10.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9,<10" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=9,<10" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11" },
 ]
-provides-extras = ["cuda", "fast", "test", "dev"]
+provides-extras = ["cuda", "fast", "metal", "test", "dev"]
 
 [[package]]
 name = "pygments"

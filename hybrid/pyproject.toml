@@ -10,7 +10,7 @@ requires-python = ">=3.11,<3.13"
 license = "MIT"
 authors = [{ name = "Rohan Pandula" }]
 dependencies = [
-    "portable-digital-ice[fast]==0.2.0",
+    "portable-digital-ice[fast]==0.3.0",
     "numpy>=2.4,<3",
     "scipy>=1.16,<2",
     "imageio>=2.37,<3",
