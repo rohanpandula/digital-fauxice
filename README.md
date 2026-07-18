@@ -60,6 +60,9 @@ that routes the saturated areas to an AI inpainting model (LaMa) and
 composites the result into the exact output. AI fill-in is invention, not
 recovery, so the tool is built around rules that keep it honest:
 
+- The router only escalates a saturated region to the model once it covers at
+  least 400 pixels or has an in-frame chessboard radius of at least 5 pixels,
+  then dilates the routed union by 4 pixels.
 - Outside the AI patches, the output stays byte-identical to the exact
   result, and the run's receipt proves that pixel by pixel.
 - Every AI-filled pixel is disclosed in a mask written next to the output.
@@ -74,8 +77,33 @@ recovery, so the tool is built around rules that keep it honest:
 On my two validation frames the tool routed 0.07% of frame 1 and 1.36% of
 frame 2 to the model. I reviewed both results at up to 3x magnification, in
 normal and inverted polarity, and accepted them on 2026-07-17. This repository
-ships the diagnostics export the hybrid tool binds to. The hybrid package
-itself is not published yet, and the model weights are never redistributed.
+ships the diagnostics export the hybrid tool binds to.
+
+fauxce-hybrid now lives in [`hybrid/`](hybrid/) in this repository. Grab the
+engine wheel and the `fauxce-hybrid` wheel from the same
+[release](https://github.com/rohanpandula/digital-fauxice/releases) and
+`pip install` both, engine first. For development, clone the repository and
+run `uv sync --extra test` inside `hybrid/`; its `pyproject.toml` points at
+the engine in this same repo as an editable path dependency.
+
+The tool never bundles the inpainting runtime or the model weights. You
+supply a pinned [IOPaint 1.6.0](https://pypi.org/project/IOPaint/) runtime in
+its own environment, plus `big-lama.pt` from the upstream
+[Sanster release](https://github.com/Sanster/models/releases/tag/add_big_lama),
+whose SHA-256 the tool measures and records rather than trusting a filename:
+`344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9`. Neither is
+redistributed here.
+
+On an Apple M4, the IOPaint batch itself took 29.5 and 159.4 seconds for
+frame 1 and frame 2; whole-frame wall time, including the cpu-fast engine
+pass, routing, and compositing, was 72 and 210 seconds. CPU is the only
+validated inpaint device. IOPaint 1.6.0 blocklists LaMa on Apple's `mps`
+device and silently reroutes it to CPU while still reporting `mps`, so this
+adapter refuses an `mps` request outright rather than record a receipt that
+claims a device it didn't use. A direct probe of the model weights shows LaMa
+itself runs fine on MPS, so this is IOPaint's pin, not a hardware limitation;
+see [`hybrid/docs/hybrid-repair.md`](hybrid/docs/hybrid-repair.md) for the
+validation notes.
 
 ## Will it work on my scans
 
