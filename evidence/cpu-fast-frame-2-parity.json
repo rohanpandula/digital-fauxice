@@ -39,8 +39,8 @@
       10
     ]
   },
-  "source_manifest_sha256": "7632ba3b91e31137f06469c62a026c9e4875ba5895bbd19a13caa416f00107ff",
-  "canonical_private_receipt_sha256": "0dc978a53b49262da9cd64f0ff27f798d8f71bde3ab1a7bbb8ea5d8f680e8dc6",
+  "source_manifest_sha256": "901bda31963d6749ab1b5183ced77d605412ecde0fffd2731d9ef964099ded21",
+  "canonical_private_receipt_sha256": "ab821bc3cbdecdb2e0ad1ec01bcd6a32d8b6309956e324b09df9225d81860718",
   "cpu_fast_runtime": {
     "machine": "arm64",
     "os": "macOS",
@@ -51,9 +51,10 @@
     "llvmlite": "0.48.0",
     "numba_threads": 10,
     "elapsed_seconds_per_run": [
-      10.068,
-      10.202
-    ]
+      19.479,
+      19.214
+    ],
+    "load_note": "wall times measured under unrelated external system load (1-minute load average ~12-21 on 10 cores); byte equality is load-independent, and the same gates measured 10.1-11.0 seconds per run on a quiet host"
   },
   "cpu_reference_runtime": {
     "machine": "arm64",
