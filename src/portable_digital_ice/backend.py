@@ -2,10 +2,12 @@
 
 ``cpu`` always selects the exact validated reference.  ``cuda`` requires a
 usable CUDA device and raises with a specific reason otherwise; it never
-silently substitutes another implementation.  ``cpu-fast`` requires the
-optional compiled CPU backend (numba) and likewise raises with a specific
-reason when it cannot run exactly.  ``auto`` tries CUDA first, then cpu-fast,
-then the CPU reference; each candidate must first reproduce the CPU reference
+silently substitutes another implementation.  ``metal`` requires a usable
+Metal device (Apple GPU) plus the compiled host writer and raises with a
+specific reason otherwise.  ``cpu-fast`` requires the optional compiled CPU
+backend (numba) and likewise raises with a specific reason when it cannot
+run exactly.  ``auto`` tries CUDA first, then Metal, then cpu-fast, then the
+CPU reference; each candidate must first reproduce the CPU reference
 byte-for-byte on a synthetic acquisition, and every fallthrough reason is
 reported in ``BackendSelection.reason``.
 """
@@ -34,6 +36,7 @@ class ComputeBackend(StrEnum):
     CPU = "cpu"
     CPU_FAST = "cpu-fast"
     CUDA = "cuda"
+    METAL = "metal"
 
 
 @dataclass(frozen=True)
@@ -183,6 +186,50 @@ def _raise_cpu_fast_from_reason(reason: str) -> None:
     raise CpuFastUnavailable(reason)
 
 
+def _raise_metal_from_reason(reason: str) -> None:
+    from .metal_backend.engine import MetalBackendUnavailable
+
+    raise MetalBackendUnavailable(reason)
+
+
+def metal_self_test() -> None:
+    """Prove Metal/CPU byte parity on the synthetic job or raise.
+
+    The comparison covers output bytes, the RNG advance count, the final RNG
+    state, all writer counters, and the three diagnostics planes bitwise.
+    The (successful or failed) outcome is cached per process; a failure
+    reason is re-raised on later calls.
+
+    Apple GPUs have no binary64 hardware, so the Metal kernels execute every
+    binary64 operation through a software IEEE-754 path; this self-test is
+    what proves that path reproduces the reference bit-for-bit on the local
+    device and driver before any real frame is accepted.
+    """
+
+    cached = _SELF_TEST_CACHE.get("metal-outcome", "unset")
+    if cached is None:
+        return
+    if cached != "unset":
+        _raise_metal_from_reason(str(cached))
+
+    try:
+        from .metal_backend import process_metal
+
+        job = _synthetic_self_test_job()
+        cpu = process_cpu(job, export_diagnostics=True)
+        gpu = process_metal(job, export_diagnostics=True)
+        failures = _parity_failures(cpu, gpu, "metal")
+        if failures:
+            reason = "Metal self-test failed parity: " + "; ".join(failures)
+            _SELF_TEST_CACHE["metal-outcome"] = reason
+            _raise_metal_from_reason(reason)
+    except Exception as error:
+        if _SELF_TEST_CACHE.get("metal-outcome", "unset") == "unset":
+            _SELF_TEST_CACHE["metal-outcome"] = f"Metal self-test raised: {error!r}"
+        raise
+    _SELF_TEST_CACHE["metal-outcome"] = None
+
+
 def _numba_version() -> str:
     import numba
 
@@ -294,32 +341,11 @@ def process(
             ),
         )
 
-    # AUTO: CUDA first, then cpu-fast, then the exact CPU reference.
-    try:
-        cuda_self_test()
-    except Exception as cuda_error:
-        try:
-            cpu_fast_self_test()
-        except Exception as cpu_fast_error:
-            result = process_cpu(
-                job,
-                output_rgb16=output_rgb16,
-                progress=progress,
-                cancelled=cancelled,
-                export_diagnostics=export_diagnostics,
-            )
-            return BackendProcessingResult(
-                result,
-                BackendSelection(
-                    requested,
-                    ComputeBackend.CPU,
-                    f"CUDA unavailable ({cuda_error}); cpu-fast unavailable "
-                    f"({cpu_fast_error}); using exact CPU reference",
-                ),
-            )
-        from .fast_cpu import process_cpu_fast
+    if requested is ComputeBackend.METAL:
+        metal_self_test()
+        from .metal_backend import process_metal
 
-        result = process_cpu_fast(
+        result = process_metal(
             job,
             output_rgb16=output_rgb16,
             progress=progress,
@@ -330,9 +356,74 @@ def process(
             result,
             BackendSelection(
                 requested,
-                ComputeBackend.CPU_FAST,
-                f"CUDA unavailable ({cuda_error}); cpu-fast startup self-test "
-                f"passed byte parity (numba {_numba_version()})",
+                ComputeBackend.METAL,
+                "explicit Metal request; self-test passed",
+            ),
+        )
+
+    # AUTO: CUDA first, then Metal, then cpu-fast, then the exact CPU
+    # reference.
+    try:
+        cuda_self_test()
+    except Exception as cuda_error:
+        try:
+            metal_self_test()
+        except Exception as metal_error:
+            try:
+                cpu_fast_self_test()
+            except Exception as cpu_fast_error:
+                result = process_cpu(
+                    job,
+                    output_rgb16=output_rgb16,
+                    progress=progress,
+                    cancelled=cancelled,
+                    export_diagnostics=export_diagnostics,
+                )
+                return BackendProcessingResult(
+                    result,
+                    BackendSelection(
+                        requested,
+                        ComputeBackend.CPU,
+                        f"CUDA unavailable ({cuda_error}); Metal unavailable "
+                        f"({metal_error}); cpu-fast unavailable "
+                        f"({cpu_fast_error}); using exact CPU reference",
+                    ),
+                )
+            from .fast_cpu import process_cpu_fast
+
+            result = process_cpu_fast(
+                job,
+                output_rgb16=output_rgb16,
+                progress=progress,
+                cancelled=cancelled,
+                export_diagnostics=export_diagnostics,
+            )
+            return BackendProcessingResult(
+                result,
+                BackendSelection(
+                    requested,
+                    ComputeBackend.CPU_FAST,
+                    f"CUDA unavailable ({cuda_error}); Metal unavailable "
+                    f"({metal_error}); cpu-fast startup self-test "
+                    f"passed byte parity (numba {_numba_version()})",
+                ),
+            )
+        from .metal_backend import process_metal
+
+        result = process_metal(
+            job,
+            output_rgb16=output_rgb16,
+            progress=progress,
+            cancelled=cancelled,
+            export_diagnostics=export_diagnostics,
+        )
+        return BackendProcessingResult(
+            result,
+            BackendSelection(
+                requested,
+                ComputeBackend.METAL,
+                f"CUDA unavailable ({cuda_error}); Metal startup self-test "
+                "passed byte parity",
             ),
         )
     from .cuda_backend import process_cuda
@@ -359,5 +450,6 @@ __all__ = [
     "ProcessingDiagnostics",
     "cpu_fast_self_test",
     "cuda_self_test",
+    "metal_self_test",
     "process",
 ]

@@ -45,8 +45,9 @@ deliberately a conservative research implementation. The optional CUDA backend
 produces byte-identical output in about 5.5 to 6.5 seconds on an NVIDIA RTX
 A4000 (the sequential writer chain runs on one host CPU core through the same
 compiled path as the CPU backend below), an optional compiled CPU backend
-does the same in about ten seconds on an Apple M4, and both fail closed
-rather than run in any configuration they cannot verify.
+does the same in about ten seconds on an Apple M4, an optional Metal backend
+does the same in about nine seconds on that M4's GPU, and all of them fail
+closed rather than run in any configuration they cannot verify.
 
 ## Optional AI repair for the worst damage
 
@@ -222,8 +223,9 @@ The reverse-engineering evidence covers:
 - Digital ICE Normal;
 - the observed internal resolution metrics 500 and 4000;
 - complete native 4000 dpi processing on two different mounted C-41 frames;
-- exact CPU execution with Python and NumPy; and
-- exact CUDA execution on an NVIDIA RTX A4000.
+- exact CPU execution with Python and NumPy;
+- exact CUDA execution on an NVIDIA RTX A4000; and
+- exact Metal execution on an Apple M4.
 
 The packaged runtime currently enables only the metric-4000 profile used by
 the two complete native-frame gates. It fails closed outside that profile and
@@ -233,7 +235,8 @@ resolution metrics, or every possible film and defect distribution.
 ### Backends
 
 The checked-in CPU path is the exact reference. An optional deterministic
-CUDA backend ships behind `ComputeBackend.AUTO | CPU | CPU_FAST | CUDA`,
+CUDA backend ships behind
+`ComputeBackend.AUTO | CPU | CPU_FAST | CUDA | METAL`,
 validated by binding receipts on both complete native 4000 dpi frames:
 identical RGB16 output to this package's CPU reference, compared sample by
 sample (68,447,316 values per frame, zero mismatches), with identical
@@ -257,9 +260,21 @@ reason when numba is unavailable or its startup self-test cannot prove byte
 parity, and `auto` prefers CUDA, then cpu-fast, then the exact CPU
 reference. See [`docs/cpu-fast-backend.md`](docs/cpu-fast-backend.md).
 
-A Metal backend for Apple Silicon remains planned under the same rule:
-availability and speed are not parity evidence, and no backend is labeled
-exact before its complete output matches the reference byte for byte.
+An optional Metal backend for Apple Silicon (`metal`, optional extra
+`pip install 'portable-digital-ice[metal]'`) holds the same receipt-backed
+claim on both complete validation frames: byte-identical output, counters,
+RNG accounting, and diagnostics planes, 26 binding checks per frame, in
+about nine seconds per frame on an Apple M4. Apple GPUs have no
+double-precision hardware, so the kernels execute every binary64 operation
+through a software IEEE-754 implementation in integer arithmetic, which no
+compiler mode can contract, reassociate, or flush; the full-frame receipts
+chain to the CPU reference through the pinned hashes of the cuda and
+cpu-fast receipts on the same fixture bytes, and a startup self-test proves
+direct byte parity against the reference in every process before any real
+frame is accepted. It fails closed with a specific reason when the Metal
+binding, a device, or the compiled host writer is unavailable, and `auto`
+prefers CUDA, then Metal, then cpu-fast, then the exact CPU reference. See
+[`docs/metal-backend.md`](docs/metal-backend.md).
 
 The NegPy integration is being developed separately so this repository remains
 a small, scanner-focused engine rather than an application fork.
@@ -313,6 +328,7 @@ policy, gates, and validation rules live in
 | `docs/input-contract.md` | Dual-RGBI acquisition and API requirements |
 | `docs/cuda-backend.md` | Deterministic CUDA backend and its binding receipts |
 | `docs/cpu-fast-backend.md` | Compiled CPU backend and its binding receipts |
+| `docs/metal-backend.md` | Deterministic Metal backend and its binding receipts |
 | `docs/hybrid-repair-design.md` | Policy, gates, and validation rules for the optional hybrid mode |
 
 ## License and names
