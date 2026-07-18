@@ -19,6 +19,10 @@ cuda = [
 fast = [
     "numba>=0.65,<0.68",
 ]
+metal = [
+    "pyobjc-framework-Metal>=10.3",
+    "numba>=0.65,<0.68",
+]
 test = [
     "pytest>=9,<10",
 ]
