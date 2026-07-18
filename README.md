@@ -42,8 +42,8 @@ image happens to agree.
 
 The pure Python and NumPy reference takes roughly an hour per frame. It is
 deliberately a conservative research implementation. The optional CUDA backend
-produces byte-identical output in about 5.5 seconds on an NVIDIA RTX A4000
-(the sequential writer chain runs on one host CPU core through the same
+produces byte-identical output in about 5.5 to 6.5 seconds on an NVIDIA RTX
+A4000 (the sequential writer chain runs on one host CPU core through the same
 compiled path as the CPU backend below), an optional compiled CPU backend
 does the same in about ten seconds on an Apple M4, and both fail closed
 rather than run in any configuration they cannot verify.
@@ -220,8 +220,11 @@ An optional compiled CPU backend (`cpu-fast`, optional extra
 `pip install 'portable-digital-ice[fast]'`) holds the same receipt-backed
 claim: byte-identical output, counters, RNG accounting, and diagnostics
 planes on both complete validation frames, deterministic across thread
-counts and repeated runs, in about 9.5 seconds per frame on an Apple M4
-against roughly an hour for the reference. It fails closed with a specific
+counts and repeated runs, in about ten seconds per frame on an Apple M4
+against roughly an hour for the reference, and comparably on an x86-64
+Linux host. Continuous integration runs the compiled suite, including its
+bit-exactness harness, on Linux, Windows, and macOS; the checked-in
+full-frame receipts are from the arm64 host. It fails closed with a specific
 reason when numba is unavailable or its startup self-test cannot prove byte
 parity, and `auto` prefers CUDA, then cpu-fast, then the exact CPU
 reference. See [`docs/cpu-fast-backend.md`](docs/cpu-fast-backend.md).
