@@ -345,8 +345,14 @@ def test_automatic_strengths_matches_reference_including_nan() -> None:
 
 
 def test_fma_contraction_canary_zero_deviations() -> None:
-    """njit's a*b+c must not fuse into FMA on discriminating triples."""
+    """njit's a*b+c must not fuse into FMA on discriminating triples.
 
+    ``math.fma`` exists only on Python 3.13+, so older interpreters run the
+    zero-deviation comparison over every triple and leave the
+    discriminating-power proof to the 3.13 lanes.
+    """
+
+    fused_reference = getattr(math, "fma", None)
     rng = np.random.default_rng(20260721)
     canary_diff = 0
     canary_failures = 0
@@ -356,13 +362,14 @@ def test_fma_contraction_canary_zero_deviations() -> None:
         b = rng.random() * 2.0 - 1.0
         c = (rng.random() * 2.0 - 1.0) * 1e-8
         unfused = a * b + c
-        fused = math.fma(a, b, c)
-        if unfused != fused:
+        if _jit_mul_add(a, b, c) != unfused:
+            canary_failures += 1
+        if fused_reference is not None and fused_reference(a, b, c) != unfused:
             canary_diff += 1
-            jit_value = _jit_mul_add(a, b, c)
-            if jit_value != unfused:
-                canary_failures += 1
-    assert canary_diff > 0, "canary produced no discriminating triples; test is vacuous"
+    if fused_reference is not None:
+        assert canary_diff > 0, (
+            "canary produced no discriminating triples; test is vacuous"
+        )
     assert canary_failures == 0, (
-        f"{canary_failures} of {canary_diff} njit a*b+c calls contracted to FMA"
+        f"{canary_failures} njit a*b+c calls deviated from unfused evaluation"
     )
