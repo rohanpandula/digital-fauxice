@@ -59,3 +59,26 @@ jobs:
         run: ruff check src tests
       - name: Test
         run: pytest
+
+  hybrid:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: hybrid
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install uv
+        run: pip install uv
+      - name: Sync
+        run: uv sync --extra test --python ${{ matrix.python-version }}
+      - name: Lint
+        run: uv run ruff check src tests
+      - name: Test
+        run: uv run pytest
