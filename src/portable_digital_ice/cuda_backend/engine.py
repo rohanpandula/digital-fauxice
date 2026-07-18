@@ -4,16 +4,19 @@ Hybrid boundary (measured, see docs/cuda-backend.md):
 
 - GPU: response LUT indexing, auxiliary/score/weighted planes, decision
   neighborhoods, per-pixel feature records, multiscale candidates, the
-  combiner, the sequential conditional-dither writer chain (one device thread
-  carrying the 24-bit LCG), output conversion, and the producer's per-row /
-  per-epoch sums.
+  combiner, output conversion, and the producer's per-row / per-epoch sums.
 - CPU: input validation, prepass reduction, producer cross-row finalization,
   stage-parameter resolution, the recovered six-stage hidden startup replay,
-  final hashing, and receipt assembly.
+  the sequential conditional-dither writer chain (the compiled ``fast_cpu``
+  writer, run on one host core -- see :mod:`.host_writer`), final hashing,
+  and receipt assembly.
 
 The kernels never approximate: every operation keeps the reference's widening,
 rounding, and store schedule, and the backend refuses to run rather than
-substitute a different numeric path.
+substitute a different numeric path.  The writer chain moved off the device
+because it was sequential by necessity (one device thread carrying the
+24-bit LCG); the compiled host writer reproduces the exact same draw order
+and semantics, proven byte-exact against the same reference.
 """
 
 from __future__ import annotations
@@ -46,6 +49,8 @@ from ..x3a import (
     ScoreParameters,
     SharedLookupInputResponse,
 )
+from .host_writer import ensure_available as ensure_host_writer_available
+from .host_writer import run_writer_chain
 from .kernels import NVRTC_OPTIONS, render_kernel_source
 from .rowparams import derive_row_parameter_table
 
@@ -197,6 +202,7 @@ def run_streaming_replay_cuda(
     """Byte-exact CUDA mirror of :func:`..streaming.run_streaming_replay`."""
 
     cp = _cupy()
+    fast_kernels = ensure_host_writer_available()
     pixels = np.asarray(main_rgbi)
     output = np.asarray(output_rgb16)
     if pixels.dtype != np.dtype(np.uint16) or pixels.ndim != 3 or pixels.shape[2] != 4:
@@ -417,35 +423,54 @@ def run_streaming_replay_cuda(
         )
     _check_cancelled()
 
-    gpu_values = cp.zeros(max(selected_count, 1) * 3, dtype=cp.float32)
-    gpu_written = cp.zeros(max(selected_count, 1), dtype=cp.uint8)
-    gpu_advances = cp.zeros(1, dtype=cp.uint64)
-    gpu_state_out = cp.zeros(1, dtype=cp.uint32)
-    scales = [np.float32(value) for value in reconstruction_parameters.dither_scales]
-    with timer.gpu("kernel.writer-chain"):
-        module.get_function("k_writer_chain")(
-        (1,),
-        (1,),
-        (
-            selected,
-            np.int64(selected_count),
-            gpu_attempted,
-            gpu_candidate,
-            gpu_original,
-            gpu_floor_enabled,
-            np.int32(width),
-            np.uint32(active_generator.state),
-            np.float32(dither_bounds.low),
-            np.float32(dither_bounds.high),
-            scales[0],
-            scales[1],
-            scales[2],
-            gpu_values,
-            gpu_written,
-            gpu_advances,
-            gpu_state_out,
-        ),
+    # The writer chain runs on one host CPU core via the compiled fast_cpu
+    # path (docs/cuda-decision-record.md's ranked next optimization): the
+    # GPU pipeline's per-selected-site attempted/candidate arrays cross the
+    # PCIe bus as raw bytes and feed the same write_band that validates
+    # byte-exact against this reference on the cpu-fast backend.  See
+    # .host_writer for the layout mapping and its ordering argument.
+    low64 = float(np.float32(dither_bounds.low))
+    high64 = float(np.float32(dither_bounds.high))
+    low_lt_high = low64 < high64
+    dither_scales_array = np.asarray(
+        reconstruction_parameters.dither_scales, dtype=np.float32
     )
+    state_in = int(active_generator.state)
+    with timer.cpu("host.writer-chain"):
+        with timer.cpu("host.writer-chain.download"):
+            selected_host = cp.asnumpy(selected)
+            attempted_host = cp.asnumpy(gpu_attempted)[:selected_count]
+            candidate_host = cp.asnumpy(gpu_candidate)[: selected_count * 3].reshape(
+                selected_count, 3
+            )
+            floor_enabled_host = cp.asnumpy(gpu_floor_enabled)
+            working_host = cp.asnumpy(gpu_working)
+        with timer.cpu("host.writer-chain.compute"):
+            (
+                values_at_selected,
+                written_at_selected,
+                advances,
+                final_state,
+            ) = run_writer_chain(
+                fast_kernels,
+                selected=selected_host,
+                attempted=attempted_host,
+                candidate=candidate_host,
+                working_all=working_host,
+                floor_enabled_rows=floor_enabled_host,
+                width=width,
+                state_in=state_in,
+                low64=low64,
+                high64=high64,
+                low_lt_high=low_lt_high,
+                dither_scales=dither_scales_array,
+            )
+        with timer.cpu("host.writer-chain.upload"):
+            gpu_values = cp.asarray(
+                np.ascontiguousarray(values_at_selected.reshape(-1)),
+                dtype=cp.float32,
+            )
+            gpu_written = cp.asarray(written_at_selected, dtype=cp.uint8)
     _check_cancelled()
 
     gpu_work_output = cp.empty((height, width, 3), dtype=cp.float32)
@@ -509,8 +534,8 @@ def run_streaming_replay_cuda(
     with timer.cpu("download.output"):
         host_out = cp.asnumpy(gpu_out)
     counters = cp.asnumpy(gpu_counters)
-    advances = int(cp.asnumpy(gpu_advances)[0])
-    final_state = int(cp.asnumpy(gpu_state_out)[0])
+    # advances / final_state were already produced by the host writer chain
+    # above; the writer no longer has a device-side state to download.
 
     if _diagnostic_score_plane is not None:
         if (
