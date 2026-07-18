@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "portable-digital-ice"
-version = "0.1.0"
-description = "Portable CPU runtime for a validated dual-RGBI scanner profile"
+version = "0.2.0"
+description = "Portable CPU and CUDA runtime for a validated dual-RGBI scanner profile"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.4,<3",
@@ -14,10 +14,10 @@ dependencies = [
 [project.optional-dependencies]
 cuda = [
     "cupy-cuda12x>=13",
-    "numba>=0.66,<0.68",
+    "numba>=0.65,<0.68",
 ]
 fast = [
-    "numba>=0.66,<0.68",
+    "numba>=0.65,<0.68",
 ]
 test = [
     "pytest>=9,<10",
