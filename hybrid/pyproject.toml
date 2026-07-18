@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fauxce-hybrid"
+version = "0.3.0"
+description = "Provenance-first generative fallback for Portable Digital ICE"
+requires-python = ">=3.11,<3.13"
+license = "MIT"
+authors = [{ name = "Rohan Pandula" }]
+dependencies = [
+    "portable-digital-ice[fast]==0.2.0",
+    "numpy>=2.4,<3",
+    "scipy>=1.16,<2",
+    "imageio>=2.37,<3",
+    "jsonschema>=4.25,<5",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=9,<10",
+    "ruff>=0.11",
+]
+
+[project.scripts]
+fauxce-hybrid = "fauxce_hybrid.cli:main"
+
+[tool.uv.sources]
+portable-digital-ice = { path = "..", editable = true }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"

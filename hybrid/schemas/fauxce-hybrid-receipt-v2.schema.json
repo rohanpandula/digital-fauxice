@@ -1,0 +1,1348 @@
+{
+  "$id": "https://portable-digital-ice.invalid/schemas/fauxce-hybrid-receipt-v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/artifact"
+      },
+      "minItems": 6,
+      "type": "array"
+    },
+    "composite": {
+      "$ref": "#/$defs/composite"
+    },
+    "core": {
+      "$ref": "#/$defs/core"
+    },
+    "disclosure": {
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "const": "Portable Digital ICE output is byte-exact outside the synthesis mask only; pixels inside the mask include generative content."
+        },
+        "exact_scope": {
+          "const": "outside_synthesis_mask_only"
+        },
+        "inside_mask": {
+          "const": "generative_repair"
+        },
+        "verification": {
+          "const": "uint16_rgb_bytes_compared_outside_decoded_mask"
+        }
+      },
+      "required": [
+        "claim",
+        "exact_scope",
+        "inside_mask",
+        "verification"
+      ],
+      "type": "object"
+    },
+    "generation": {
+      "additionalProperties": false,
+      "properties": {
+        "generated_at_utc": {
+          "format": "date-time",
+          "pattern": "Z$",
+          "type": "string"
+        },
+        "hybrid_source_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "hybrid_version": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "source_manifest_algorithm": {
+          "const": "sha256(sorted(relative_path:sha256(file_bytes)\\n)); pyproject.toml + src/fauxce_hybrid/**/*.py + schemas/*.json"
+        }
+      },
+      "required": [
+        "generated_at_utc",
+        "hybrid_version",
+        "hybrid_source_manifest_sha256",
+        "source_manifest_algorithm"
+      ],
+      "type": "object"
+    },
+    "inpainting": {
+      "$ref": "#/$defs/inpainting"
+    },
+    "inputs": {
+      "$ref": "#/$defs/inputs"
+    },
+    "routing": {
+      "$ref": "#/$defs/routing"
+    },
+    "schema": {
+      "const": "fauxce-hybrid-receipt-v2"
+    },
+    "synthesis": {
+      "$ref": "#/$defs/synthesis"
+    }
+  },
+  "required": [
+    "schema",
+    "disclosure",
+    "generation",
+    "inputs",
+    "core",
+    "routing",
+    "composite",
+    "inpainting",
+    "artifacts",
+    "synthesis"
+  ],
+  "title": "Fauxce hybrid receipt v2",
+  "type": "object",
+  "$defs": {
+    "artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "dtype": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "file_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "id": {
+          "$ref": "#/$defs/safe_id"
+        },
+        "media_type": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "raw_encoding": {
+          "enum": [
+            "npy_array_c_order",
+            "png_decoded_uint8_c_order",
+            "opaque_file_bytes"
+          ],
+          "type": "string"
+        },
+        "raw_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "relative_path": {
+          "minLength": 1,
+          "pattern": "^(?![/~])(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/safe_id"
+        },
+        "shape": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "relative_path",
+        "media_type",
+        "raw_encoding",
+        "file_sha256",
+        "raw_sha256",
+        "dtype",
+        "shape"
+      ],
+      "type": "object"
+    },
+    "bbox": {
+      "items": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "maxItems": 4,
+      "minItems": 4,
+      "type": "array"
+    },
+    "channel_range": {
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "maximum": 2,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "degenerate": {
+          "type": "boolean"
+        },
+        "hi": {
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lo": {
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "channel",
+        "lo",
+        "hi",
+        "degenerate"
+      ],
+      "type": "object"
+    },
+    "composite": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": {
+          "const": "min(chessboard_distance_to_component_outside,3)/3"
+        },
+        "alpha_border_semantics": {
+          "const": "image_border_is_interior"
+        },
+        "blend": {
+          "const": "round_half_up(pure*(1-alpha)+generated*alpha)"
+        },
+        "channel_range": {
+          "const": "per_crop_outside_global_mask_min_max"
+        },
+        "component_order": {
+          "const": "ascending_final_component_id"
+        },
+        "components": {
+          "items": {
+            "$ref": "#/$defs/composite_component"
+          },
+          "type": "array"
+        },
+        "crop_margin": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "decode": {
+          "const": "clip(round_half_up(lo+x*(hi-lo)/255),0,65535)"
+        },
+        "degenerate_range": {
+          "const": "encode_zero_decode_lo"
+        },
+        "encode": {
+          "const": "clip(round_half_up((x-lo)*255/(hi-lo)),0,255)"
+        },
+        "hybrid_rgb16_raw_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "paste_scope": {
+          "const": "component_pixels_only"
+        },
+        "pure_rgb16_raw_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source": {
+          "const": "immutable_pure_fauxce_rgb16"
+        },
+        "synthesis_mask_bool_raw_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "source",
+        "crop_margin",
+        "component_order",
+        "channel_range",
+        "encode",
+        "decode",
+        "degenerate_range",
+        "alpha",
+        "alpha_border_semantics",
+        "blend",
+        "paste_scope",
+        "pure_rgb16_raw_sha256",
+        "synthesis_mask_bool_raw_sha256",
+        "hybrid_rgb16_raw_sha256",
+        "components"
+      ],
+      "type": "object"
+    },
+    "composite_component": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha_max": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "alpha_min": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "artifacts": {
+          "additionalProperties": false,
+          "properties": {
+            "component_mask_png": {
+              "$ref": "#/$defs/safe_id"
+            },
+            "inpainted_rgb8": {
+              "$ref": "#/$defs/safe_id"
+            },
+            "input_rgb8": {
+              "$ref": "#/$defs/safe_id"
+            }
+          },
+          "required": [
+            "input_rgb8",
+            "component_mask_png",
+            "inpainted_rgb8"
+          ],
+          "type": "object"
+        },
+        "channel_ranges": {
+          "items": {
+            "$ref": "#/$defs/channel_range"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "component_bbox_yxyx_half_open": {
+          "$ref": "#/$defs/bbox"
+        },
+        "component_id": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "context_pixel_count": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "crop_bbox_yxyx_half_open": {
+          "$ref": "#/$defs/bbox"
+        },
+        "hashes": {
+          "additionalProperties": false,
+          "properties": {
+            "blended_component_rgb16_raw_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "component_mask_u8_raw_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "decoded_rgb16_raw_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "inpainted_rgb8_raw_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "input_rgb8_raw_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "required": [
+            "input_rgb8_raw_sha256",
+            "component_mask_u8_raw_sha256",
+            "inpainted_rgb8_raw_sha256",
+            "decoded_rgb16_raw_sha256",
+            "blended_component_rgb16_raw_sha256"
+          ],
+          "type": "object"
+        },
+        "pixel_count": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "component_id",
+        "component_bbox_yxyx_half_open",
+        "crop_bbox_yxyx_half_open",
+        "pixel_count",
+        "context_pixel_count",
+        "channel_ranges",
+        "alpha_min",
+        "alpha_max",
+        "hashes",
+        "artifacts"
+      ],
+      "type": "object"
+    },
+    "core": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "additionalProperties": false,
+          "properties": {
+            "diagnostics": {
+              "enum": [
+                "cpu",
+                "cpu-fast",
+                "cuda"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/nonempty"
+            },
+            "requested": {
+              "enum": [
+                "auto",
+                "cpu",
+                "cpu-fast",
+                "cuda"
+              ]
+            },
+            "used": {
+              "enum": [
+                "cpu",
+                "cpu-fast",
+                "cuda"
+              ]
+            }
+          },
+          "required": [
+            "requested",
+            "used",
+            "reason",
+            "diagnostics"
+          ],
+          "type": "object"
+        },
+        "diagnostics": {
+          "additionalProperties": false,
+          "properties": {
+            "at_floor_pixel_count": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "changed_pixel_count": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "score_floor_u32_le_bits": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "score_floor_u32_le_bits",
+            "at_floor_pixel_count",
+            "changed_pixel_count"
+          ],
+          "type": "object"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "source_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "version": {
+          "$ref": "#/$defs/nonempty"
+        }
+      },
+      "required": [
+        "version",
+        "source_manifest_sha256",
+        "profile_id",
+        "backend",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    "final_region": {
+      "additionalProperties": false,
+      "properties": {
+        "absorbed_region_ids": {
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "area": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "bbox_yxyx_half_open": {
+          "$ref": "#/$defs/bbox"
+        },
+        "direct_region_ids": {
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "id": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "non_floor_synthesis_pixels": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "bbox_yxyx_half_open",
+        "area",
+        "direct_region_ids",
+        "absorbed_region_ids",
+        "non_floor_synthesis_pixels"
+      ],
+      "type": "object"
+    },
+    "inpainting": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/inpainting_invoked"
+        },
+        {
+          "$ref": "#/$defs/inpainting_not_invoked"
+        }
+      ]
+    },
+    "inpainting_invoked": {
+      "additionalProperties": false,
+      "properties": {
+        "determinism": {
+          "additionalProperties": false,
+          "properties": {
+            "cudnn_benchmark": {
+              "type": "boolean"
+            },
+            "deterministic_algorithms_enabled": {
+              "type": "boolean"
+            },
+            "repeat_runs": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "repeatability_observed": {
+              "type": "boolean"
+            },
+            "scope": {
+              "$ref": "#/$defs/safe_description"
+            }
+          },
+          "required": [
+            "scope",
+            "deterministic_algorithms_enabled",
+            "cudnn_benchmark",
+            "repeat_runs",
+            "repeatability_observed"
+          ],
+          "type": "object"
+        },
+        "model": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/runtime_text"
+                },
+                {
+                  "pattern": "^(?![/~])(?![A-Za-z]:)(?![Ff][Ii][Ll][Ee]:).+$"
+                }
+              ]
+            },
+            "model_artifact_license_status": {
+              "$ref": "#/$defs/safe_description"
+            },
+            "model_upstream_license_spdx": {
+              "$ref": "#/$defs/spdx_expression"
+            },
+            "sanitized_artifact_id": {
+              "$ref": "#/$defs/safe_id"
+            },
+            "sanitized_external_reference": {
+              "oneOf": [
+                {
+                  "minLength": 1,
+                  "pattern": "^(?![/~])(?![A-Za-z]:)(?![Ff][Ii][Ll][Ee]:)(?!.*\\\\).+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "version": {
+              "$ref": "#/$defs/runtime_text"
+            },
+            "weights_byte_size": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "weights_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "sanitized_artifact_id",
+            "weights_sha256",
+            "weights_byte_size",
+            "sanitized_external_reference",
+            "model_upstream_license_spdx",
+            "model_artifact_license_status"
+          ],
+          "type": "object"
+        },
+        "invoked": {
+          "const": true
+        },
+        "runtime": {
+          "additionalProperties": false,
+          "properties": {
+            "argv": {
+              "items": {
+                "$ref": "#/$defs/safe_description"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "cuda_available": {
+              "type": "boolean"
+            },
+            "cuda_device_names": {
+              "items": {
+                "$ref": "#/$defs/device_name"
+              },
+              "type": "array"
+            },
+            "cuda_runtime_version": {
+              "$ref": "#/$defs/nullable_version"
+            },
+            "cuda_visible_devices": {
+              "$ref": "#/$defs/runtime_text"
+            },
+            "cudnn_version": {
+              "$ref": "#/$defs/nullable_version"
+            },
+            "device": {
+              "enum": [
+                "cpu",
+                "cuda",
+                "mps"
+              ],
+              "type": "string"
+            },
+            "effective_environment_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "hip_runtime_version": {
+              "$ref": "#/$defs/nullable_version"
+            },
+            "mps_available": {
+              "type": "boolean"
+            },
+            "mps_device_name": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/device_name"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "numpy_version": {
+              "$ref": "#/$defs/version"
+            },
+            "opencv_version": {
+              "$ref": "#/$defs/version"
+            },
+            "pillow_version": {
+              "$ref": "#/$defs/version"
+            },
+            "platform_machine": {
+              "$ref": "#/$defs/runtime_text"
+            },
+            "platform_release": {
+              "$ref": "#/$defs/runtime_text"
+            },
+            "platform_system": {
+              "$ref": "#/$defs/runtime_text"
+            },
+            "pydantic_version": {
+              "$ref": "#/$defs/version"
+            },
+            "python_implementation": {
+              "$ref": "#/$defs/runtime_text"
+            },
+            "python_version": {
+              "$ref": "#/$defs/version"
+            },
+            "seed": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "seed_scope": {
+              "$ref": "#/$defs/safe_description"
+            },
+            "threads": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "torch_version": {
+              "$ref": "#/$defs/version"
+            },
+            "typer_version": {
+              "$ref": "#/$defs/version"
+            }
+          },
+          "required": [
+            "effective_environment_sha256",
+            "python_version",
+            "python_implementation",
+            "torch_version",
+            "numpy_version",
+            "pillow_version",
+            "opencv_version",
+            "pydantic_version",
+            "typer_version",
+            "platform_system",
+            "platform_release",
+            "platform_machine",
+            "device",
+            "threads",
+            "seed",
+            "seed_scope",
+            "argv",
+            "cuda_available",
+            "cuda_runtime_version",
+            "cudnn_version",
+            "cuda_device_names",
+            "cuda_visible_devices",
+            "hip_runtime_version",
+            "mps_available",
+            "mps_device_name"
+          ],
+          "type": "object"
+        },
+        "tool": {
+          "additionalProperties": false,
+          "properties": {
+            "entrypoint": {
+              "$ref": "#/$defs/runtime_text"
+            },
+            "iopaint_source_file_count": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "iopaint_source_manifest_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "name": {
+              "const": "IOPaint"
+            },
+            "tool_license_spdx": {
+              "$ref": "#/$defs/spdx_expression"
+            },
+            "version": {
+              "$ref": "#/$defs/version"
+            }
+          },
+          "required": [
+            "name",
+            "version",
+            "entrypoint",
+            "tool_license_spdx",
+            "iopaint_source_manifest_sha256",
+            "iopaint_source_file_count"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "invoked",
+        "tool",
+        "model",
+        "runtime",
+        "determinism"
+      ],
+      "type": "object"
+    },
+    "inpainting_not_invoked": {
+      "additionalProperties": false,
+      "properties": {
+        "invoked": {
+          "const": false
+        },
+        "reason": {
+          "const": "empty_synthesis_mask"
+        }
+      },
+      "required": [
+        "invoked",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "input_image": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_encoding": {
+          "const": "uint16_little_endian_c_order"
+        },
+        "raw_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "shape": {
+          "$ref": "#/$defs/shape_rgbi"
+        }
+      },
+      "required": [
+        "raw_sha256",
+        "shape",
+        "canonical_encoding"
+      ],
+      "type": "object"
+    },
+    "inputs": {
+      "additionalProperties": false,
+      "properties": {
+        "geometry": {
+          "additionalProperties": false,
+          "properties": {
+            "mask_shape": {
+              "$ref": "#/$defs/shape_mask"
+            },
+            "output_shape": {
+              "$ref": "#/$defs/shape_rgb"
+            }
+          },
+          "required": [
+            "output_shape",
+            "mask_shape"
+          ],
+          "type": "object"
+        },
+        "main": {
+          "$ref": "#/$defs/input_image"
+        },
+        "prepass": {
+          "$ref": "#/$defs/input_image"
+        },
+        "provenance": {
+          "additionalProperties": false,
+          "properties": {
+            "basis": {
+              "const": "caller_asserted"
+            },
+            "focus_exposure_assertion_id": {
+              "$ref": "#/$defs/nonempty"
+            },
+            "same_frame_assertion_id": {
+              "$ref": "#/$defs/nonempty"
+            },
+            "source_manifest_sha256": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/sha256"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "basis",
+            "same_frame_assertion_id",
+            "focus_exposure_assertion_id",
+            "source_manifest_sha256"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "prepass",
+        "main",
+        "provenance",
+        "geometry"
+      ],
+      "type": "object"
+    },
+    "device_name": {
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9 .,+_()@-]*$",
+      "type": "string"
+    },
+    "nonempty": {
+      "minLength": 1,
+      "pattern": "^\\S(?:.*\\S)?$",
+      "type": "string"
+    },
+    "nullable_version": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/version"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "provisional_region": {
+      "additionalProperties": false,
+      "properties": {
+        "absorbed_pixel_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "area": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "bbox_yxyx_half_open": {
+          "$ref": "#/$defs/bbox"
+        },
+        "disposition": {
+          "enum": [
+            "routed",
+            "absorbed",
+            "pristine",
+            "perimeter_excluded"
+          ]
+        },
+        "final_component_ids": {
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "id": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_chessboard_radius": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "routed_reason": {
+          "enum": [
+            "not_routed",
+            "area",
+            "chessboard_radius",
+            "area+chessboard_radius"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "bbox_yxyx_half_open",
+        "area",
+        "max_chessboard_radius",
+        "routed_reason",
+        "disposition",
+        "final_component_ids",
+        "absorbed_pixel_count"
+      ],
+      "type": "object"
+    },
+    "routing": {
+      "additionalProperties": false,
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/routing_counts"
+        },
+        "perimeter_excluded_region": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/routing_excluded_region"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "final_regions": {
+          "items": {
+            "$ref": "#/$defs/final_region"
+          },
+          "type": "array"
+        },
+        "id_rules": {
+          "additionalProperties": false,
+          "properties": {
+            "final": {
+              "const": "bbox_y0_x0_y1_x1_then_raw_id"
+            },
+            "paste": {
+              "const": "ascending_final_component_id"
+            },
+            "provisional": {
+              "const": "scipy_ndimage_label_scan_order_8_connected"
+            }
+          },
+          "required": [
+            "provisional",
+            "final",
+            "paste"
+          ],
+          "type": "object"
+        },
+        "image_shape": {
+          "$ref": "#/$defs/shape_mask"
+        },
+        "policy": {
+          "$ref": "#/$defs/routing_policy"
+        },
+        "provisional_regions": {
+          "items": {
+            "$ref": "#/$defs/provisional_region"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "const": "fauxce-hybrid-routing-v1"
+        },
+        "scipy_version": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "synthesis_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "within_synthesis_budget": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema",
+        "scipy_version",
+        "image_shape",
+        "policy",
+        "counts",
+        "synthesis_fraction",
+        "within_synthesis_budget",
+        "perimeter_excluded_region",
+        "id_rules",
+        "provisional_regions",
+        "final_regions"
+      ],
+      "type": "object"
+    },
+    "routing_counts": {
+      "additionalProperties": false,
+      "properties": {
+        "at_floor_pixels": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "directly_routed_pixels": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "final_regions": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "frame_pixels": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "non_floor_synthesis_pixels": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "perimeter_excluded_pixels": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "perimeter_excluded_regions": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "perimeter_suppressed_halo_pixels": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "provisional_regions": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "synthesis_pixels": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unchanged_synthesis_pixels": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "frame_pixels",
+        "at_floor_pixels",
+        "directly_routed_pixels",
+        "perimeter_excluded_regions",
+        "perimeter_excluded_pixels",
+        "perimeter_suppressed_halo_pixels",
+        "provisional_regions",
+        "final_regions",
+        "synthesis_pixels",
+        "non_floor_synthesis_pixels",
+        "unchanged_synthesis_pixels"
+      ],
+      "type": "object"
+    },
+    "routing_excluded_region": {
+      "additionalProperties": false,
+      "properties": {
+        "area": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "bbox_yxyx_half_open": {
+          "$ref": "#/$defs/bbox"
+        },
+        "content_interpretation": {
+          "const": "unverified"
+        },
+        "id": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_chessboard_radius": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_treatment": {
+          "const": "left_pure"
+        },
+        "perimeter_pixel_count": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "predicate": {
+          "const": "contains_every_frame_perimeter_pixel"
+        },
+        "routed_reason_by_thresholds": {
+          "enum": [
+            "not_routed",
+            "area",
+            "chessboard_radius",
+            "area+chessboard_radius"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "bbox_yxyx_half_open",
+        "area",
+        "max_chessboard_radius",
+        "routed_reason_by_thresholds",
+        "perimeter_pixel_count",
+        "predicate",
+        "content_interpretation",
+        "output_treatment"
+      ],
+      "type": "object"
+    },
+    "routing_policy": {
+      "additionalProperties": false,
+      "properties": {
+        "connectivity": {
+          "const": 8
+        },
+        "dilation": {
+          "const": "single_square_chebyshev_footprint"
+        },
+        "distance_border_semantics": {
+          "const": "unpadded_in_frame_background"
+        },
+        "distance_metric": {
+          "const": "chessboard"
+        },
+        "final_id_sort_key": {
+          "const": [
+            "y0",
+            "x0",
+            "y1",
+            "x1",
+            "raw_id"
+          ]
+        },
+        "margin": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_synth_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "min_area": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "min_radius": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "perimeter_rule": {
+          "const": "exclude_component_covering_full_perimeter"
+        },
+        "thresholds_provisional": {
+          "const": true
+        }
+      },
+      "required": [
+        "connectivity",
+        "distance_metric",
+        "distance_border_semantics",
+        "min_area",
+        "min_radius",
+        "margin",
+        "dilation",
+        "max_synth_fraction",
+        "thresholds_provisional",
+        "perimeter_rule",
+        "final_id_sort_key"
+      ],
+      "type": "object"
+    },
+    "safe_id": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "type": "string"
+    },
+    "runtime_text": {
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9 .,+_/:()@-]*$",
+      "type": "string"
+    },
+    "safe_description": {
+      "maxLength": 512,
+      "pattern": "^[!-~](?:[ -~]*[!-~])?$",
+      "type": "string"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "spdx_expression": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9.+() -]*$",
+      "type": "string"
+    },
+    "shape_mask": {
+      "items": false,
+      "prefixItems": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "minimum": 1,
+          "type": "integer"
+        }
+      ],
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    },
+    "shape_rgb": {
+      "items": false,
+      "prefixItems": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "const": 3
+        }
+      ],
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "shape_rgbi": {
+      "items": false,
+      "prefixItems": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "const": 4
+        }
+      ],
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "version": {
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9.+_-]*$",
+      "type": "string"
+    },
+    "synthesis": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics_cache_artifact_id": {
+          "$ref": "#/$defs/safe_id"
+        },
+        "fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "frame_pixel_count": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "hybrid_output_artifact_id": {
+          "$ref": "#/$defs/safe_id"
+        },
+        "mask_artifact_id": {
+          "$ref": "#/$defs/safe_id"
+        },
+        "maximum_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "pixel_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pure_output_artifact_id": {
+          "$ref": "#/$defs/safe_id"
+        },
+        "within_budget": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pure_output_artifact_id",
+        "hybrid_output_artifact_id",
+        "mask_artifact_id",
+        "diagnostics_cache_artifact_id",
+        "pixel_count",
+        "frame_pixel_count",
+        "fraction",
+        "within_budget",
+        "maximum_fraction"
+      ],
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+dist/
+build/
+*.egg-info/
+
+# The repo root ignores *.npy as a blanket rule against real scanner
+# captures. These example arrays are synthetic, tiny, and redistributed
+# on purpose as part of the package.
+!examples/**/*.npy
