@@ -14,6 +14,34 @@ This repository contains the portable processing core, synthetic tests, and
 sanitized validation receipts. It does not contain Nikon software, firmware,
 scanner binaries, personal scans, or the separate color-inversion work.
 
+## Why it still matters
+
+Digital ICE was built by Applied Science Fiction in the late 1990s, licensed
+into a generation of film scanners, and then orphaned. Kodak bought the
+company in 2003. Nikon, which had put the best-regarded version of it in the
+Coolscan line, ended that line around 2010. The scanners that carried it are
+out of production, and a working Super Coolscan 5000 or 9000 now resells for
+more than it cost new. A good part of that price is the dust removal.
+
+Nothing since has replaced it. Infrared cleaning needs a fourth channel the
+scanner reads in hardware, and software that knows what to do with it. The
+hardware went out of production and the software stayed locked to it. Camera
+scanning, which is how most people digitize film today, captures no infrared
+at all, so it has no equivalent. The choice there is spotting dust by hand or
+letting a general inpainting tool guess at the whole frame. VueScan and
+SilverFast still ship their own infrared cleaning and both are worth running,
+but people who compare them against a Coolscan tend to come back to Nikon's
+processing, and that processing only runs inside a dead driver on hardware
+Nikon stopped supporting years ago.
+
+This project takes it off the machine. The exact recreation reproduces
+Nikon's result value for value, on any computer, with no Nikon code involved.
+The optional hybrid mode then does something the original never could. On the
+worst damage, where Nikon's method leaves a visible scar, it routes just those
+regions to a modern inpainting model and composites the fill back in,
+disclosed and bounded, while every pixel outside stays exactly what Nikon
+would have produced.
+
 ## What Digital ICE does
 
 A compatible film scanner records four channels: red, green, blue, and
@@ -108,12 +136,17 @@ validation notes.
 
 ## Will it work on my scans
 
-This is an engine, not an app. The scanner acquisition adapter and the
-end-user TIFF workflow are still product work, so using it today means calling
-a Python library with two 16-bit RGBI arrays of the same physical frame: a
-285 dpi prepass and a 4000 dpi main capture, with focus, exposure, frame
-position, and crop geometry unchanged between them.
+This is an engine, not an app. Using it directly means calling a Python
+library with two 16-bit RGBI arrays of the same physical frame: a 285 dpi
+prepass and a 4000 dpi main capture, with focus, exposure, frame position, and
+crop geometry unchanged between them.
 [`docs/input-contract.md`](docs/input-contract.md) has the exact requirements.
+
+The acquisition side now has its own package.
+[coolscanpy](https://github.com/rohanpandula/coolscanpy) drives a Super
+Coolscan over USB and produces this dual-RGBI capture, so the input no longer
+has to come from the original Nikon software. The end-user application that
+connects capture, this engine, and color inversion is still being assembled.
 
 The validated boundary is narrow on purpose: a Super Coolscan 5000 ED running
 Digital ICE Normal, in the resolution profile used by the two full-frame
