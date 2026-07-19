@@ -123,10 +123,26 @@ whose SHA-256 the tool measures and records rather than trusting a filename:
 `344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9`. Neither is
 redistributed here.
 
-On an Apple M4, the IOPaint batch itself took 29.5 and 159.4 seconds for
-frame 1 and frame 2; whole-frame wall time, including the cpu-fast engine
-pass, routing, and compositing, was 72 and 210 seconds. CPU is the only
-validated inpaint device. IOPaint 1.6.0 blocklists LaMa on Apple's `mps`
+Hybrid is much slower than the exact path, and the gap tracks how damaged a
+frame is rather than how large it is. The model runs once per routed region,
+so a clean frame costs little and a scratched one costs a lot.
+
+| On an Apple M4 | Frame 1 | Frame 2 |
+|---|---:|---:|
+| Routed to the model | 13 regions, 0.07% | 75 regions, 1.36% |
+| Exact repair alone, cpu-fast | about 10 s | about 10 s |
+| Hybrid, whole frame | 72 s | 210 s |
+| of which the IOPaint batch | 29.5 s | 159.4 s |
+
+That is roughly seven times the exact path on a lightly marked frame and
+twenty times on a badly marked one. Over a 36 frame roll it is the difference
+between about six minutes and somewhere between forty minutes and two hours.
+The sensible pattern is to run the exact path across a roll and reach for
+hybrid on the few frames that need it. The remaining time beyond the model
+batch is the engine pass, the diagnostics export, routing, compositing, and
+the receipt work that proves byte identity outside the mask.
+
+CPU is the only validated inpaint device. IOPaint 1.6.0 blocklists LaMa on Apple's `mps`
 device and silently reroutes it to CPU while still reporting `mps`, so this
 adapter refuses an `mps` request outright rather than record a receipt that
 claims a device it didn't use. A direct probe of the model weights shows LaMa
