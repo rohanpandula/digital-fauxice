@@ -150,6 +150,39 @@ itself runs fine on MPS, so this is IOPaint's pin, not a hardware limitation;
 see [`hybrid/docs/hybrid-repair.md`](hybrid/docs/hybrid-repair.md) for the
 validation notes.
 
+## Repairing without smearing the grain
+
+The exact engine and the hybrid both already draw dust repair the way I think
+it should be drawn on film: reconstruct where there is signal, invent only
+where there is none, and never touch a clean pixel. I checked that with one
+infrared mask held fixed across methods, so the test scores only the repair
+step. Over the same mask on the synthetic scan, a guarded reflection copy (clone
+a real neighbour from the side facing away from each speck, write only through
+the mask) and a Navier-Stokes inpainter standing in for a generative tier remove
+the dust about equally well. The difference is the clean rim.
+
+| Method, synthetic scan | Clean-pixel PSNR | Inside-defect MAE |
+|---|---:|---:|
+| Reflection copy | 99.0 dB | 0.2095 |
+| Navier-Stokes inpaint | 52.9 dB | 0.2077 |
+
+Ninety-nine decibels on the clean pixels means bit-identical to the input there.
+The copier leaves no halo because it is not allowed to write outside the mask,
+while the inpainter diffuses across a padded neighbourhood and smooths the grain
+at every speck. The same held on a real crop scored on clean pixels only,
+99.0 dB and a 0.0000 residual for the copier against 52.9 dB and 0.0023 for the
+inpainter. Those pixels are a personal scan, so only the aggregate numbers and
+the synthetic montage below are published here. The practical read is that the
+generative tier earns its place only on the saturated tears with no clean
+neighbour to copy, exactly the regions the hybrid routes and bounds, and the
+grain-preserving pass should carry the rest. The reflection-copy kernel I
+measured is Marcin Zawalski's work in [NegPy](https://github.com/marcinz606/NegPy)
+(GPL-3.0); it is a comparator here, not a dependency. The full comparison, the
+real-leg table, and how to reproduce it are in
+[docs/dust-heal-comparison.md](docs/dust-heal-comparison.md).
+
+![Four-panel dust heal comparison on the seeded synthetic scan, with zoomed defect spots and the per-method collateral table](docs/media/dust-heal-synthetic-comparison.png)
+
 ## Will it work on my scans
 
 This is an engine, not an app. Using it directly means calling a Python
@@ -379,6 +412,16 @@ policy, gates, and validation rules live in
 | `docs/cpu-fast-backend.md` | Compiled CPU backend and its binding receipts |
 | `docs/metal-backend.md` | Deterministic Metal backend and its binding receipts |
 | `docs/hybrid-repair-design.md` | Policy, gates, and validation rules for the optional hybrid mode |
+| `docs/dust-heal-comparison.md` | Head-to-head of grain-preserving heal versus generative fill on a synthetic scan |
+| `docs/media/dust-heal-synthetic-comparison.png` | The four-panel montage the comparison doc describes |
+
+## Acknowledgments
+
+The guarded reflection-copy heal in the comparison above is from
+[NegPy](https://github.com/marcinz606/NegPy) by Marcin Zawalski, GPL-3.0, the
+clearest copy-instead-of-fill implementation I found. It shaped the comparison
+and the framing of it; it appears only as a comparator and a reference
+technique, and no NegPy code ships in this package.
 
 ## License and names
 
