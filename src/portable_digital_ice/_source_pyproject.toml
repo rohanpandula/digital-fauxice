@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "portable-digital-ice"
-version = "0.3.0"
+version = "0.3.1"
 description = "Portable CPU, CUDA, and Metal runtime for a validated dual-RGBI scanner profile"
 requires-python = ">=3.11"
 dependencies = [
