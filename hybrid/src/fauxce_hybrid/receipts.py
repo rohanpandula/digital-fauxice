@@ -337,39 +337,83 @@ def canonical_receipt_bytes(document: object) -> bytes:
     return encoded.encode("utf-8") + b"\n"
 
 
-def _project_root() -> Path:
-    root = Path(__file__).resolve().parents[2]
-    if not (root / "pyproject.toml").is_file() or not (root / "src").is_dir():
-        raise ReceiptError("cannot locate the fauxce-hybrid source project")
-    return root
+def _current_hybrid_source_inputs() -> tuple[Path, Path, Path]:
+    """Resolve package, schema, and pyproject inputs for source or wheel use."""
+
+    package = Path(__file__).resolve().parent
+    schema_directory = package / "schemas"
+    root = package.parent.parent
+    source_pyproject = root / "pyproject.toml"
+    expected_package = root / "src" / "fauxce_hybrid"
+    if source_pyproject.is_file() and expected_package.is_dir():
+        try:
+            if not expected_package.samefile(package):
+                raise ReceiptError(
+                    "fauxce-hybrid package is not loaded from its bound source tree"
+                )
+        except OSError as error:
+            raise ReceiptError(
+                f"cannot resolve the fauxce-hybrid source tree: {error}"
+            ) from error
+        embedded_pyproject = package / "_source_pyproject.toml"
+        try:
+            if embedded_pyproject.read_bytes() != source_pyproject.read_bytes():
+                raise ReceiptError(
+                    "packaged hybrid pyproject copy does not match the source project"
+                )
+        except OSError as error:
+            raise ReceiptError(
+                f"cannot validate packaged hybrid pyproject copy: {error}"
+            ) from error
+        return package, schema_directory, source_pyproject
+
+    embedded_pyproject = package / "_source_pyproject.toml"
+    if not embedded_pyproject.is_file():
+        raise ReceiptError("fauxce-hybrid wheel is missing its bound pyproject copy")
+    return package, schema_directory, embedded_pyproject
 
 
 def compute_hybrid_source_manifest(project_root: str | Path | None = None) -> str:
     """Hash hybrid code, schema, and pyproject with stable relative names."""
 
-    root = _project_root() if project_root is None else Path(project_root).resolve()
-    pyproject = root / "pyproject.toml"
-    package = root / "src" / "fauxce_hybrid"
-    schema_directory = root / "schemas"
+    root = None if project_root is None else Path(project_root).resolve()
+    if root is None:
+        package, schema_directory, pyproject = _current_hybrid_source_inputs()
+    else:
+        pyproject = root / "pyproject.toml"
+        package = root / "src" / "fauxce_hybrid"
+        source_schema_directory = root / "schemas"
+        packaged_schema_directory = package / "schemas"
+        schema_directory = (
+            source_schema_directory
+            if source_schema_directory.is_dir()
+            else packaged_schema_directory
+        )
     if not pyproject.is_file() or not package.is_dir() or not schema_directory.is_dir():
         raise ReceiptError(
             "hybrid source manifest requires pyproject.toml, src/fauxce_hybrid, "
             "and schemas"
         )
-    files = [pyproject, *package.rglob("*.py"), *schema_directory.glob("*.json")]
-    if len(files) == 1:
+    records = [
+        ("pyproject.toml", pyproject),
+        *(
+            (f"src/fauxce_hybrid/{path.relative_to(package).as_posix()}", path)
+            for path in package.rglob("*.py")
+        ),
+        *((f"schemas/{path.name}", path) for path in schema_directory.glob("*.json")),
+    ]
+    if len(records) == 1:
         raise ReceiptError("hybrid source manifest found no Python sources")
-    records: list[bytes] = []
-    for path in sorted(files, key=lambda item: item.relative_to(root).as_posix()):
-        relative = path.relative_to(root).as_posix()
+    encoded_records: list[bytes] = []
+    for relative, path in sorted(records, key=lambda item: item[0]):
         try:
             digest = _sha256_bytes(path.read_bytes())
         except OSError as error:
             raise ReceiptError(
                 f"cannot hash hybrid source {relative}: {error}"
             ) from error
-        records.append(f"{relative}:{digest}\n".encode("utf-8"))
-    return _sha256_bytes(b"".join(records))
+        encoded_records.append(f"{relative}:{digest}\n".encode("utf-8"))
+    return _sha256_bytes(b"".join(encoded_records))
 
 
 def current_hybrid_version() -> str:
@@ -1652,7 +1696,7 @@ def build_receipt_document(
 
 
 def _schema_path() -> Path:
-    return _project_root() / "schemas" / SCHEMA_FILENAME
+    return Path(__file__).resolve().parent / "schemas" / SCHEMA_FILENAME
 
 
 def load_receipt_schema() -> dict[str, Any]:

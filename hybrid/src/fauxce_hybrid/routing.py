@@ -17,6 +17,19 @@ BoolImage = npt.NDArray[np.bool_]
 LabelImage = npt.NDArray[np.int32]
 _CONNECTIVITY_8 = np.ones((3, 3), dtype=np.bool_)
 
+# The default compositor adds 128 pixels of healthy context around a final
+# region before it invokes the model.  Keep each model input at or below a
+# 2048 x 2048 image: that is small enough to be bounded on the supported
+# runtime while still leaving useful context around a 1792 x 1792 core tile.
+# These constants are part of the deterministic routing contract so a receipt
+# can show exactly why one connected synthesis region became several model
+# calls.
+INPAINT_CROP_MARGIN = 128
+MAX_INPAINT_CROP_PIXELS = 4_194_304
+MAX_SYNTHESIS_TILE_EDGE = (
+    math.isqrt(MAX_INPAINT_CROP_PIXELS) - 2 * INPAINT_CROP_MARGIN
+)
+
 
 class RoutedReason(StrEnum):
     """The threshold predicate or predicates that routed a region."""
@@ -355,15 +368,79 @@ def _normalized_final_labels(
             max_label=component_count,
         )
     )
-    ordered_raw_ids = sorted(
-        range(1, component_count + 1),
-        key=lambda raw_id: (*raw_boxes[raw_id - 1].as_list(), raw_id),
+    height, width = synthesis_mask.shape
+
+    def expanded_crop_pixels(box: BoundingBox) -> int:
+        crop_y0 = max(0, box.y0 - INPAINT_CROP_MARGIN)
+        crop_x0 = max(0, box.x0 - INPAINT_CROP_MARGIN)
+        crop_y1 = min(height, box.y1 + INPAINT_CROP_MARGIN)
+        crop_x1 = min(width, box.x1 + INPAINT_CROP_MARGIN)
+        return (crop_y1 - crop_y0) * (crop_x1 - crop_x0)
+
+    # A region can be sparse yet have a nearly full-frame bounding box.  Split
+    # only those oversized regions into deterministic non-overlapping tiles.
+    # Relabeling inside each tile ensures that each resulting final label is
+    # still 8-connected, as required by the compositor and receipt verifier.
+    fragment_labels = np.zeros(synthesis_mask.shape, dtype=np.int32)
+    fragment_boxes: list[BoundingBox] = []
+    next_fragment_id = 1
+    for raw_id, raw_box in enumerate(raw_boxes, start=1):
+        raw_slice = (slice(raw_box.y0, raw_box.y1), slice(raw_box.x0, raw_box.x1))
+        raw_component = raw_labels[raw_slice] == raw_id
+        if expanded_crop_pixels(raw_box) <= MAX_INPAINT_CROP_PIXELS:
+            fragment_labels[raw_slice][raw_component] = next_fragment_id
+            fragment_boxes.append(raw_box)
+            next_fragment_id += 1
+            continue
+
+        for y0 in range(raw_box.y0, raw_box.y1, MAX_SYNTHESIS_TILE_EDGE):
+            y1 = min(y0 + MAX_SYNTHESIS_TILE_EDGE, raw_box.y1)
+            for x0 in range(raw_box.x0, raw_box.x1, MAX_SYNTHESIS_TILE_EDGE):
+                x1 = min(x0 + MAX_SYNTHESIS_TILE_EDGE, raw_box.x1)
+                tile_component = raw_labels[y0:y1, x0:x1] == raw_id
+                tile_labels = np.empty(tile_component.shape, dtype=np.int32)
+                tile_count = int(
+                    ndimage.label(
+                        tile_component,
+                        structure=_CONNECTIVITY_8,
+                        output=tile_labels,
+                    )
+                )
+                if tile_count == 0:
+                    continue
+                for tile_id, tile_slice in enumerate(
+                    ndimage.find_objects(tile_labels, max_label=tile_count),
+                    start=1,
+                ):
+                    tile_box = _bbox_from_slice(tile_slice)
+                    fragment_labels[y0:y1, x0:x1][tile_labels == tile_id] = (
+                        next_fragment_id
+                    )
+                    fragment_boxes.append(
+                        BoundingBox(
+                            y0 + tile_box.y0,
+                            x0 + tile_box.x0,
+                            y0 + tile_box.y1,
+                            x0 + tile_box.x1,
+                        )
+                    )
+                    next_fragment_id += 1
+
+    fragment_count = next_fragment_id - 1
+    ordered_fragment_ids = sorted(
+        range(1, fragment_count + 1),
+        key=lambda fragment_id: (
+            *fragment_boxes[fragment_id - 1].as_list(),
+            fragment_id,
+        ),
     )
-    old_to_new = np.zeros(component_count + 1, dtype=np.int32)
-    for new_id, raw_id in enumerate(ordered_raw_ids, start=1):
-        old_to_new[raw_id] = new_id
-    normalized = np.ascontiguousarray(old_to_new[raw_labels], dtype=np.int32)
-    normalized_boxes = tuple(raw_boxes[raw_id - 1] for raw_id in ordered_raw_ids)
+    old_to_new = np.zeros(fragment_count + 1, dtype=np.int32)
+    for new_id, fragment_id in enumerate(ordered_fragment_ids, start=1):
+        old_to_new[fragment_id] = new_id
+    normalized = np.ascontiguousarray(old_to_new[fragment_labels], dtype=np.int32)
+    normalized_boxes = tuple(
+        fragment_boxes[fragment_id - 1] for fragment_id in ordered_fragment_ids
+    )
     return normalized, normalized_boxes
 
 
@@ -503,7 +580,7 @@ def route_at_floor_mask(
             disposition = RegionDisposition.PERIMETER_EXCLUDED
             absorbed_pixel_count = 0
         elif is_directly_routed:
-            if len(final_component_ids) != 1:
+            if not final_component_ids:
                 raise RuntimeError("directly routed region lost its final binding")
             disposition = RegionDisposition.ROUTED
             absorbed_pixel_count = 0
@@ -636,6 +713,12 @@ def routing_json_document(result: RoutingResult) -> dict[str, object]:
             "thresholds_provisional": True,
             "perimeter_rule": "exclude_component_covering_full_perimeter",
             "final_id_sort_key": ["y0", "x0", "y1", "x1", "raw_id"],
+            "final_component_partition": {
+                "algorithm": "bbox_grid_8_connected_fragments",
+                "crop_margin": INPAINT_CROP_MARGIN,
+                "max_crop_pixels": MAX_INPAINT_CROP_PIXELS,
+                "max_core_tile_edge": MAX_SYNTHESIS_TILE_EDGE,
+            },
         },
         "counts": {
             "frame_pixels": result.image_shape[0] * result.image_shape[1],
@@ -710,6 +793,9 @@ def serialize_routing_json(result: RoutingResult) -> bytes:
 __all__ = [
     "BoundingBox",
     "FinalSynthesisRegion",
+    "INPAINT_CROP_MARGIN",
+    "MAX_INPAINT_CROP_PIXELS",
+    "MAX_SYNTHESIS_TILE_EDGE",
     "NoHealthyContextError",
     "ProvisionalRegion",
     "RegionDisposition",

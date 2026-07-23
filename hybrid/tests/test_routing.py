@@ -9,6 +9,8 @@ from scipy import ndimage
 import fauxce_hybrid.routing as routing_module
 from fauxce_hybrid.routing import (
     BoundingBox,
+    INPAINT_CROP_MARGIN,
+    MAX_INPAINT_CROP_PIXELS,
     NoHealthyContextError,
     RegionDisposition,
     RoutedReason,
@@ -438,6 +440,41 @@ def test_final_ids_are_normalized_in_bbox_order() -> None:
     ]
     assert int(result.final_labels[4, 5]) == 1
     assert int(result.final_labels[30, 35]) == 2
+
+
+def test_oversized_final_region_is_partitioned_without_changing_the_mask() -> None:
+    """A sparse full-frame-spanning region becomes bounded model inputs."""
+
+    mask = np.zeros((2_200, 2_200), dtype=bool)
+    mask[100:2_100, 100:2_100] = True
+
+    result = route_at_floor_mask(
+        mask,
+        RoutingPolicy(
+            min_area=1,
+            min_radius=100,
+            margin=0,
+            max_synth_fraction=1.0,
+        ),
+    )
+
+    np.testing.assert_array_equal(result.synthesis_mask, mask)
+    assert len(result.final_regions) == 4
+    assert result.provisional_regions[0].final_component_ids == (1, 2, 3, 4)
+    assert all(region.direct_region_ids == (1,) for region in result.final_regions)
+    assert sum(region.area for region in result.final_regions) == int(mask.sum())
+    for region in result.final_regions:
+        y0 = max(0, region.bbox.y0 - INPAINT_CROP_MARGIN)
+        x0 = max(0, region.bbox.x0 - INPAINT_CROP_MARGIN)
+        y1 = min(mask.shape[0], region.bbox.y1 + INPAINT_CROP_MARGIN)
+        x1 = min(mask.shape[1], region.bbox.x1 + INPAINT_CROP_MARGIN)
+        assert (y1 - y0) * (x1 - x0) <= MAX_INPAINT_CROP_PIXELS
+    assert routing_json_document(result)["policy"]["final_component_partition"] == {
+        "algorithm": "bbox_grid_8_connected_fragments",
+        "crop_margin": 128,
+        "max_crop_pixels": 4_194_304,
+        "max_core_tile_edge": 1_792,
+    }
 
 
 @pytest.mark.parametrize("shape", ((1, 1), (1, 9), (6, 9)))

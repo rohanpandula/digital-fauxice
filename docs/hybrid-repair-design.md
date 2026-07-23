@@ -328,7 +328,9 @@ inpainter.
 
 - `synth-mask.png`: 8-bit PNG, 255 = synthesized pixel, 0 otherwise.
 - `hybrid-receipt.json`, schema `fauxce-hybrid-receipt-v2`, validated against
-  the checked-in `schemas/fauxce-hybrid-receipt-v2.schema.json`. Required
+  the checked-in package resource
+  `hybrid/src/fauxce_hybrid/schemas/fauxce-hybrid-receipt-v2.schema.json`.
+  Required
   groups:
   - disclosure: generative regions true; exactness claim limited to outside
     the synthesis mask;

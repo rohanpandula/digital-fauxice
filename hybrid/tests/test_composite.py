@@ -8,6 +8,8 @@ import pytest
 import fauxce_hybrid.composite as composite_module
 from fauxce_hybrid.composite import (
     MAX_COMPONENTS_PER_RUN,
+    MAX_INPAINT_CROP_PIXELS,
+    MAX_TOTAL_CROP_PIXELS,
     CompositeResourceLimitError,
     NoContextPixelsError,
     affine_decode_uint16,
@@ -26,6 +28,11 @@ def _constant_rgb(
 
 def _raw_hash(array: np.ndarray) -> str:
     return hashlib.sha256(np.ascontiguousarray(array).tobytes()).hexdigest()
+
+
+def test_crop_budget_bounds_model_inputs_but_admits_multiple_tiles() -> None:
+    assert MAX_INPAINT_CROP_PIXELS == 2_048 * 2_048
+    assert MAX_TOTAL_CROP_PIXELS >= 16 * MAX_INPAINT_CROP_PIXELS
 
 
 def _multiple_component_inputs() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -776,12 +783,12 @@ def test_sparse_mask_component_count_fails_before_model_execution() -> None:
 
 
 def test_sparse_mask_total_crop_pixels_fail_before_model_execution() -> None:
-    shape = (1_024, 1_024)
+    shape = (1_200, 1_200)
     source = _constant_rgb(shape, 12_000)
     labels = np.zeros(shape, dtype=np.int32)
     rows, columns = np.meshgrid(
-        np.arange(8, shape[0], 32),
-        np.arange(8, shape[1], 32),
+        np.arange(8, shape[0], 35),
+        np.arange(8, shape[1], 35),
         indexing="ij",
     )
     positions = np.column_stack((rows.ravel(), columns.ravel()))
@@ -808,4 +815,21 @@ def test_sparse_mask_total_crop_pixels_fail_before_model_execution() -> None:
             forbidden,
             crop_margin=128,
         )
+    assert not called
+
+
+def test_oversized_component_crop_fails_before_model_execution() -> None:
+    source = _constant_rgb((2_300, 2_300), 12_000)
+    labels = np.zeros(source.shape[:2], dtype=np.int32)
+    labels[100:2_100, 100:2_100] = 1
+    mask = labels != 0
+    called = False
+
+    def forbidden(_rgb: np.ndarray, _mask: np.ndarray) -> np.ndarray:
+        nonlocal called
+        called = True
+        raise AssertionError("resource preflight must run before the model")
+
+    with pytest.raises(CompositeResourceLimitError, match="component crop pixels"):
+        composite_components(source, labels, mask, forbidden)
     assert not called

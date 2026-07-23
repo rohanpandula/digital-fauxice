@@ -18,7 +18,11 @@ import numpy as np
 import numpy.typing as npt
 from scipy import ndimage
 
-from .routing import BoundingBox
+from .routing import (
+    BoundingBox,
+    INPAINT_CROP_MARGIN,
+    MAX_INPAINT_CROP_PIXELS,
+)
 
 
 UInt8RgbImage = npt.NDArray[np.uint8]
@@ -30,7 +34,10 @@ LabelImage = npt.NDArray[np.int32]
 _CONNECTIVITY_8 = np.ones((3, 3), dtype=np.bool_)
 _FEATHER_RADIUS = 3
 MAX_COMPONENTS_PER_RUN: Final = 4_096
-MAX_TOTAL_CROP_PIXELS: Final = 16_777_216
+# Routing partitions any oversized final region before it reaches the
+# compositor.  The aggregate cap still bounds pathological jobs with many
+# valid tiles while the per-crop cap protects the model process itself.
+MAX_TOTAL_CROP_PIXELS: Final = 67_108_864
 
 
 class Inpainter(Protocol):
@@ -407,6 +414,11 @@ def _build_plans(
             image_shape=labels.shape,
         )
         crop_pixels = (crop_bbox.y1 - crop_bbox.y0) * (crop_bbox.x1 - crop_bbox.x0)
+        if crop_pixels > MAX_INPAINT_CROP_PIXELS:
+            raise CompositeResourceLimitError(
+                "component crop pixels exceed the bounded composite limit: "
+                f"{crop_pixels} > {MAX_INPAINT_CROP_PIXELS}"
+            )
         if crop_pixels > MAX_TOTAL_CROP_PIXELS - total_crop_pixels:
             raise CompositeResourceLimitError(
                 "total planned crop pixels exceed the bounded composite limit: "
@@ -600,7 +612,7 @@ def composite_components(
     synthesis_mask: npt.ArrayLike,
     inpainter: Inpainter | BatchInpainter,
     *,
-    crop_margin: int = 128,
+    crop_margin: int = INPAINT_CROP_MARGIN,
 ) -> CompositeResult:
     """Inpaint and feather disjoint labeled components into a pure ICE image.
 
@@ -719,6 +731,7 @@ __all__ = [
     "CompositeResult",
     "Inpainter",
     "MAX_COMPONENTS_PER_RUN",
+    "MAX_INPAINT_CROP_PIXELS",
     "MAX_TOTAL_CROP_PIXELS",
     "NoContextPixelsError",
     "affine_decode_uint16",

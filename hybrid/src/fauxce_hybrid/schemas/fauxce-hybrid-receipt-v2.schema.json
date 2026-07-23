@@ -1172,6 +1172,30 @@
             "raw_id"
           ]
         },
+        "final_component_partition": {
+          "additionalProperties": false,
+          "properties": {
+            "algorithm": {
+              "const": "bbox_grid_8_connected_fragments"
+            },
+            "crop_margin": {
+              "const": 128
+            },
+            "max_crop_pixels": {
+              "const": 4194304
+            },
+            "max_core_tile_edge": {
+              "const": 1792
+            }
+          },
+          "required": [
+            "algorithm",
+            "crop_margin",
+            "max_crop_pixels",
+            "max_core_tile_edge"
+          ],
+          "type": "object"
+        },
         "margin": {
           "minimum": 0,
           "type": "integer"
@@ -1207,7 +1231,8 @@
         "max_synth_fraction",
         "thresholds_provisional",
         "perimeter_rule",
-        "final_id_sort_key"
+        "final_id_sort_key",
+        "final_component_partition"
       ],
       "type": "object"
     },

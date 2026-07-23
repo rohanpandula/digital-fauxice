@@ -224,28 +224,50 @@ def canonical_json_bytes(document: object) -> bytes:
     return encoded.encode("utf-8") + b"\n"
 
 
-def _current_core_project_root() -> Path:
+def _current_core_source_inputs() -> tuple[Path, Path]:
+    """Return the installed package directory and its bound pyproject copy.
+
+    Editable/source installs use the live project ``pyproject.toml`` after
+    proving that the imported package belongs to that tree.  Ordinary wheels
+    use the byte-identical copy shipped as package data.  The manifest keeps
+    the same canonical ``pyproject.toml`` record in both layouts.
+    """
+
     package_file = getattr(portable_digital_ice, "__file__", None)
     if package_file is None:
         raise DiagnosticsCacheError("cannot locate portable_digital_ice source")
     package_directory = Path(package_file).resolve().parent
     project_root = package_directory.parent.parent
     expected_package = project_root / "src" / "portable_digital_ice"
-    if not (project_root / "pyproject.toml").is_file() or not expected_package.is_dir():
-        raise DiagnosticsCacheError(
-            "portable_digital_ice must expose its source tree and pyproject.toml "
-            "for cache binding"
-        )
-    try:
-        if not expected_package.samefile(package_directory):
+    source_pyproject = project_root / "pyproject.toml"
+    if source_pyproject.is_file() and expected_package.is_dir():
+        try:
+            if not expected_package.samefile(package_directory):
+                raise DiagnosticsCacheError(
+                    "portable_digital_ice package is not loaded from its bound source tree"
+                )
+        except OSError as error:
             raise DiagnosticsCacheError(
-                "portable_digital_ice package is not loaded from its bound source tree"
-            )
-    except OSError as error:
+                f"cannot resolve core source tree: {error}"
+            ) from error
+        embedded_pyproject = package_directory / "_source_pyproject.toml"
+        try:
+            if embedded_pyproject.read_bytes() != source_pyproject.read_bytes():
+                raise DiagnosticsCacheError(
+                    "packaged core pyproject copy does not match the source project"
+                )
+        except OSError as error:
+            raise DiagnosticsCacheError(
+                f"cannot validate packaged core pyproject copy: {error}"
+            ) from error
+        return package_directory, source_pyproject
+
+    embedded_pyproject = package_directory / "_source_pyproject.toml"
+    if not embedded_pyproject.is_file():
         raise DiagnosticsCacheError(
-            f"cannot resolve core source tree: {error}"
-        ) from error
-    return project_root
+            "portable_digital_ice wheel is missing its bound pyproject copy"
+        )
+    return package_directory, embedded_pyproject
 
 
 def compute_core_source_manifest(project_root: str | Path | None = None) -> str:
@@ -257,35 +279,42 @@ def compute_core_source_manifest(project_root: str | Path | None = None) -> str:
     ``relative/path:sha256(file-bytes)\n``.
     """
 
-    root = (
-        _current_core_project_root()
-        if project_root is None
-        else Path(project_root).resolve()
-    )
-    pyproject = root / "pyproject.toml"
-    package_directory = root / "src" / "portable_digital_ice"
+    root = None if project_root is None else Path(project_root).resolve()
+    if root is None:
+        package_directory, pyproject = _current_core_source_inputs()
+    else:
+        pyproject = root / "pyproject.toml"
+        package_directory = root / "src" / "portable_digital_ice"
     if not pyproject.is_file() or not package_directory.is_dir():
         raise DiagnosticsCacheError(
             "core source manifest requires pyproject.toml and src/portable_digital_ice"
         )
     files = sorted(
         package_directory.rglob("*.py"),
-        key=lambda item: item.relative_to(root).as_posix(),
+        key=lambda item: item.relative_to(package_directory).as_posix(),
     )
     if not files:
         raise DiagnosticsCacheError("core source manifest found no Python sources")
-    files.append(pyproject)
-    records: list[bytes] = []
-    for path in files:
-        relative = path.relative_to(root).as_posix()
+    records: list[tuple[str, Path]] = [
+        (
+            f"src/portable_digital_ice/{path.relative_to(package_directory).as_posix()}",
+            path,
+        )
+        for path in files
+    ]
+    # Preserve the established core algorithm: sorted Python records followed
+    # by the pyproject record.
+    records.append(("pyproject.toml", pyproject))
+    encoded_records: list[bytes] = []
+    for relative, path in records:
         try:
             file_digest = _sha256_bytes(path.read_bytes())
         except OSError as error:
             raise DiagnosticsCacheError(
                 f"cannot hash core source {relative}: {error}"
             ) from error
-        records.append(f"{relative}:{file_digest}\n".encode("utf-8"))
-    return _sha256_bytes(b"".join(records))
+        encoded_records.append(f"{relative}:{file_digest}\n".encode("utf-8"))
+    return _sha256_bytes(b"".join(encoded_records))
 
 
 def _current_core_version() -> str:
