@@ -39,6 +39,7 @@ from portable_digital_ice import (
 )
 from portable_digital_ice.cuda_backend.engine import CudaBackendUnavailable
 from portable_digital_ice.fast_cpu import CpuFastUnavailable
+from portable_digital_ice.metal_backend.engine import MetalBackendUnavailable
 
 from .cache import (
     CachedDiagnostics,
@@ -463,33 +464,16 @@ def _build_job(
     )
 
 
-def _process_with_auto_full_run_fallback(
+def _process_with_backend_confirmation(
     job: ProcessingJob,
     *,
     requested_backend: str,
 ) -> BackendProcessingResult:
-    try:
-        processed = process_digital_ice(
-            job,
-            backend=requested_backend,
-            export_diagnostics=True,
-        )
-    except CudaBackendUnavailable:
-        if requested_backend != ComputeBackend.AUTO.value:
-            raise
-        fallback = process_digital_ice(
-            job,
-            backend=ComputeBackend.CPU,
-            export_diagnostics=True,
-        )
-        return BackendProcessingResult(
-            result=fallback.result,
-            selection=BackendSelection(
-                requested=ComputeBackend.AUTO,
-                used=ComputeBackend.CPU,
-                reason=canonical_backend_reason("auto", "cpu"),
-            ),
-        )
+    processed = process_digital_ice(
+        job,
+        backend=requested_backend,
+        export_diagnostics=True,
+    )
     selection = processed.selection
     if selection.requested.value != requested_backend:
         raise HybridCLIError("core returned a mismatched requested backend")
@@ -642,7 +626,7 @@ def _obtain_run_products(
             cache_mode="loaded",
         )
 
-    processed = _process_with_auto_full_run_fallback(
+    processed = _process_with_backend_confirmation(
         job,
         requested_backend=args.backend,
     )
@@ -1573,6 +1557,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         DiagnosticsCacheError,
         HybridCLIError,
         IOPaintError,
+        MetalBackendUnavailable,
         NoContextPixelsError,
         NoHealthyContextError,
         ReceiptError,
