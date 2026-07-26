@@ -59,5 +59,37 @@
   "cpu_fast_runtime": {
     "elapsed_seconds": 16.81
   },
-  "stage_timings_note": "see docs/metal-backend.md for the stage table"
+  "stage_timings_note": "see docs/metal-backend.md for the stage table",
+  "reverified_after_session_leak_fix": {
+    "date": "2026-07-25",
+    "note": "Additive re-verification appended after fixing a _Session leak (pyobjc did not balance ownership for Metal's new*-family selectors, so every buffer/queue this session created stayed retained, growing device.currentAllocatedSize() by roughly one buffer's worth per replay call until working-set headroom failed closed on later frames of one process). The fields above this key are the original minted receipt, unmodified. Full narrative: reverse_engineering/results/METAL-BACKEND-SESSION-LEAK-FIX-20260725.md",
+    "files_changed": [
+      "src/portable_digital_ice/metal_backend/engine.py",
+      "src/portable_digital_ice/metal_backend/producer.py"
+    ],
+    "cpu_fast_and_metal_output_sha256_unchanged": true,
+    "attempted_pixels_unchanged": true,
+    "written_pixels_unchanged": true,
+    "changed_pixels_unchanged": true,
+    "final_rng_state_unchanged": true,
+    "main_rgbi16_raw_byte_sha256_unchanged": true,
+    "prepass_rgbi16_raw_byte_sha256_unchanged": true,
+    "metal_run_1_vs_run_2_identical": true,
+    "cpu_fast_baseline_matches_pinned_logical_output": true,
+    "source_manifest_sha256": "38404bd01c8c5121d628c84cd466529265a4e62c755ada2aa897973c80749c96",
+    "source_manifest_scope": "src/portable_digital_ice/**/*.py only (31 files); the original 32-file manifest's minting script is not present in the repository (confirmed by search) so it is not included here",
+    "elapsed_seconds_per_run": [
+      5.28,
+      5.26
+    ],
+    "runtime": {
+      "gpu": "Apple M4",
+      "machine": "arm64",
+      "os": "macOS 26.5.2",
+      "python": "3.13.5",
+      "numpy": "2.4.6",
+      "numba": "0.66.0",
+      "pyobjc": "12.2.1"
+    }
+  }
 }

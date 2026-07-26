@@ -64,98 +64,105 @@ def derive_producer_record_schedule_metal(
 
     get_kernel_library()
     session = _Session()
-    buf_pixels, _ = session.upload(pixels)
-    buf_lut, _ = session.upload(np.ascontiguousarray(table))
-    buf_failpos, _ = session.alloc(np.int32, (block_count, cell_count))
-    buf_row_visible, row_visible_view = session.alloc(np.float64, (height,))
-    buf_row_infrared, row_infrared_view = session.alloc(np.float64, (height,))
-    buf_row_weight, row_weight_view = session.alloc(np.float64, (height,))
-    buf_row_accepted, row_accepted_view = session.alloc(np.uint32, (height,))
-    buf_add_denominator, add_denominator_view = session.alloc(
-        np.float32, (max(epoch_count, 1),), zero=True
-    )
-    buf_add_numerator, add_numerator_view = session.alloc(
-        np.float32, (max(epoch_count, 1),), zero=True
-    )
+    try:
+        buf_pixels, _ = session.upload(pixels)
+        buf_lut, _ = session.upload(np.ascontiguousarray(table))
+        buf_failpos, _ = session.alloc(np.int32, (block_count, cell_count))
+        buf_row_visible, row_visible_view = session.alloc(np.float64, (height,))
+        buf_row_infrared, row_infrared_view = session.alloc(np.float64, (height,))
+        buf_row_weight, row_weight_view = session.alloc(np.float64, (height,))
+        buf_row_accepted, row_accepted_view = session.alloc(np.uint32, (height,))
+        buf_add_denominator, add_denominator_view = session.alloc(
+            np.float32, (max(epoch_count, 1),), zero=True
+        )
+        buf_add_numerator, add_numerator_view = session.alloc(
+            np.float32, (max(epoch_count, 1),), zero=True
+        )
 
-    threshold_bits = session.upload(
-        np.asarray([float(threshold)], dtype=np.float64).view(np.uint64)
-    )[0]
-    failpos_iparams = session.upload(
-        np.asarray(
-            [height, width, active_width, block_count, cell_count],
-            dtype=np.int32,
-        )
-    )[0]
-    rows_iparams = session.upload(
-        np.asarray(
-            [
-                height,
-                width,
-                active_width,
-                R4000_VISIBLE_REFERENCE_CHANNEL,
-                cell_count,
-            ],
-            dtype=np.int32,
-        )
-    )[0]
-    epochs_iparams = session.upload(
-        np.asarray(
-            [
-                height,
-                width,
-                active_width,
-                R4000_VISIBLE_REFERENCE_CHANNEL,
-                epoch_count,
-            ],
-            dtype=np.int32,
-        )
-    )[0]
+        threshold_bits = session.upload(
+            np.asarray([float(threshold)], dtype=np.float64).view(np.uint64)
+        )[0]
+        failpos_iparams = session.upload(
+            np.asarray(
+                [height, width, active_width, block_count, cell_count],
+                dtype=np.int32,
+            )
+        )[0]
+        rows_iparams = session.upload(
+            np.asarray(
+                [
+                    height,
+                    width,
+                    active_width,
+                    R4000_VISIBLE_REFERENCE_CHANNEL,
+                    cell_count,
+                ],
+                dtype=np.int32,
+            )
+        )[0]
+        epochs_iparams = session.upload(
+            np.asarray(
+                [
+                    height,
+                    width,
+                    active_width,
+                    R4000_VISIBLE_REFERENCE_CHANNEL,
+                    epoch_count,
+                ],
+                dtype=np.int32,
+            )
+        )[0]
 
-    launches = [
-        (
-            get_pipeline("k_producer_failpos"),
-            [buf_pixels, buf_failpos, threshold_bits, failpos_iparams],
-            (cell_count, block_count),
-        ),
-        (
-            get_pipeline("k_producer_row_sums"),
-            [
-                buf_pixels,
-                buf_lut,
-                buf_failpos,
-                buf_row_visible,
-                buf_row_infrared,
-                buf_row_weight,
-                buf_row_accepted,
-                rows_iparams,
-            ],
-            (height,),
-        ),
-    ]
-    if epoch_count:
-        launches.append(
+        launches = [
             (
-                get_pipeline("k_producer_scale_epochs"),
+                get_pipeline("k_producer_failpos"),
+                [buf_pixels, buf_failpos, threshold_bits, failpos_iparams],
+                (cell_count, block_count),
+            ),
+            (
+                get_pipeline("k_producer_row_sums"),
                 [
                     buf_pixels,
                     buf_lut,
-                    buf_add_denominator,
-                    buf_add_numerator,
-                    threshold_bits,
-                    epochs_iparams,
+                    buf_failpos,
+                    buf_row_visible,
+                    buf_row_infrared,
+                    buf_row_weight,
+                    buf_row_accepted,
+                    rows_iparams,
                 ],
-                (epoch_count,),
+                (height,),
+            ),
+        ]
+        if epoch_count:
+            launches.append(
+                (
+                    get_pipeline("k_producer_scale_epochs"),
+                    [
+                        buf_pixels,
+                        buf_lut,
+                        buf_add_denominator,
+                        buf_add_numerator,
+                        threshold_bits,
+                        epochs_iparams,
+                    ],
+                    (epoch_count,),
+                )
             )
-        )
-    session.run(launches)
+        session.run(launches)
 
-    host_row_visible = np.array(row_visible_view)
-    host_row_infrared = np.array(row_infrared_view)
-    host_row_weight = np.array(row_weight_view)
-    host_row_accepted = np.array(row_accepted_view)
-    host_add_denominator = np.array(add_denominator_view)
-    host_add_numerator = np.array(add_numerator_view)
+        host_row_visible = np.array(row_visible_view)
+        host_row_infrared = np.array(row_infrared_view)
+        host_row_weight = np.array(row_weight_view)
+        host_row_accepted = np.array(row_accepted_view)
+        host_add_denominator = np.array(add_denominator_view)
+        host_add_numerator = np.array(add_numerator_view)
+    finally:
+        # See _Session.release: every buffer above is copied into a host
+        # numpy array before this point, so it is safe - and, per the
+        # ownership-transfer bug documented there, required - to release
+        # the whole session here rather than let GC leak it per call.
+        session.release()
 
     # Host finalization: the reference rounds after every cross-row add.
     cumulative_visible = np.empty(height, dtype=np.float64)

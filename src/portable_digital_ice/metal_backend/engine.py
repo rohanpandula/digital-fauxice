@@ -200,13 +200,32 @@ def get_pipeline(name: str):
 
 
 class _Session:
-    """One queue plus shared-buffer bookkeeping for a replay run."""
+    """One queue plus shared-buffer bookkeeping for a replay run.
+
+    pyobjc does not reliably balance the ownership transfer for Metal's
+    ``new*``-family selectors (``newCommandQueue``,
+    ``newBufferWithLength:options:``): Cocoa's naming convention hands the
+    caller a +1 owned reference that the caller must release, but pyobjc's
+    bridge leaves that reference outstanding after the Python wrapper is
+    garbage collected.  Relying on ``del``/GC alone therefore leaks the
+    full allocation of every buffer this session ever creates -
+    ``device.currentAllocatedSize()`` only grows, one buffer's worth per
+    replay call, until the working-set headroom check fails closed
+    (confirmed by direct probe: an explicit ``.release()`` reclaims the
+    memory immediately; draining an autorelease pool does not, so the
+    object was never autoreleased in the first place). Every session
+    tracks what it creates and releases it explicitly in :meth:`release`;
+    callers must use the session as a context manager (or call
+    ``release()`` themselves in a ``finally``) so cancellation and error
+    paths do not leak either.
+    """
 
     def __init__(self) -> None:
         self.metal, self.device = _device()
         self.queue = self.device.newCommandQueue()
         if self.queue is None:
             raise MetalBackendUnavailable("Metal command queue creation failed")
+        self._owned = [self.queue]
 
     def buffer(self, nbytes: int):
         buf = self.device.newBufferWithLength_options_(
@@ -216,6 +235,7 @@ class _Session:
             raise MetalBackendUnavailable(
                 f"Metal buffer allocation failed ({nbytes} bytes)"
             )
+        self._owned.append(buf)
         return buf
 
     def view(self, buf, dtype, shape) -> np.ndarray:
@@ -262,6 +282,26 @@ class _Session:
             raise MetalBackendUnavailable(
                 f"Metal command buffer failed: {command_buffer.error()}"
             )
+
+    def release(self) -> None:
+        """Explicitly release every Metal object this session created.
+
+        Every buffer this session ever hands out is read into a host numpy
+        copy (``np.array(view)`` or an assignment into a caller-owned
+        array) before the session's caller is done with it, and none of
+        these objects are cached or returned past that point - see the
+        class docstring for why this call is required rather than
+        optional cleanup.
+        """
+
+        while self._owned:
+            self._owned.pop().release()
+
+    def __enter__(self) -> "_Session":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.release()
 
 
 class _StageTimer:
@@ -353,395 +393,403 @@ def run_streaming_replay_metal(
 
     get_kernel_library()
     session = _Session()
-    timer = _StageTimer(stage_timings)
+    try:
+        timer = _StageTimer(stage_timings)
 
-    # --- host-side exact preludes -----------------------------------------
-    with timer.cpu("host.row-parameter-table"):
-        table = derive_row_parameter_table(
-            height,
+        # --- host-side exact preludes ---------------------------------------
+        with timer.cpu("host.row-parameter-table"):
+            table = derive_row_parameter_table(
+                height,
+                auxiliary_parameters=auxiliary_parameters,
+                score_parameters=score_parameters,
+                reconstruction_parameters=reconstruction_parameters,
+                stage_parameter_provider=stage_parameter_provider,
+            )
+        cache = _RowCache(
+            pixels,
+            response=response,
             auxiliary_parameters=auxiliary_parameters,
             score_parameters=score_parameters,
-            reconstruction_parameters=reconstruction_parameters,
             stage_parameter_provider=stage_parameter_provider,
         )
-    cache = _RowCache(
-        pixels,
-        response=response,
-        auxiliary_parameters=auxiliary_parameters,
-        score_parameters=score_parameters,
-        stage_parameter_provider=stage_parameter_provider,
-    )
-    active_generator = generator or LCG24.from_nikon_pe_initial_state()
-    with timer.cpu("host.startup-replay"):
-        startup = _startup_replay(
-            cache,
-            width=width,
-            score_parameters=score_parameters,
-            decision_parameters=decision_parameters,
-            reconstruction_parameters=reconstruction_parameters,
-            dither_bounds=dither_bounds,
-            generator=active_generator,
-            stage_parameter_provider=stage_parameter_provider,
+        active_generator = generator or LCG24.from_nikon_pe_initial_state()
+        with timer.cpu("host.startup-replay"):
+            startup = _startup_replay(
+                cache,
+                width=width,
+                score_parameters=score_parameters,
+                decision_parameters=decision_parameters,
+                reconstruction_parameters=reconstruction_parameters,
+                dither_bounds=dither_bounds,
+                generator=active_generator,
+                stage_parameter_provider=stage_parameter_provider,
+            )
+        _check_cancelled()
+        if progress is not None:
+            progress(0, height, 0, 0)
+
+        mode = feature_band_extrema_mode(
+            resolution_metric=reconstruction_parameters.resolution_metric,
+            cross_neighbor_cutoff=reconstruction_parameters.cross_neighbor_cutoff,
         )
-    _check_cancelled()
-    if progress is not None:
-        progress(0, height, 0, 0)
+        factors = InverseResponseFactors.recovered_16bit()
 
-    mode = feature_band_extrema_mode(
-        resolution_metric=reconstruction_parameters.resolution_metric,
-        cross_neighbor_cutoff=reconstruction_parameters.cross_neighbor_cutoff,
-    )
-    factors = InverseResponseFactors.recovered_16bit()
+        total = height * width
 
-    total = height * width
+        # --- device buffers ---------------------------------------------------
+        with timer.cpu("upload.inputs"):
+            buf_rgbi, _ = session.upload(pixels)
+            buf_lut, _ = session.upload(np.ascontiguousarray(response.table))
+            buf_aux_alpha, _ = session.upload(table.aux_alpha)
+            buf_aux_is_one, _ = session.upload(table.aux_alpha_is_one)
+            buf_aux_one_repl, _ = session.upload(table.aux_alpha_one_replacement)
+            buf_aux_offset, _ = session.upload(table.aux_offset)
+            buf_score_base, _ = session.upload(table.score_base_primary)
+            buf_writer_reference, _ = session.upload(table.writer_coarse_reference)
+            buf_floor_enabled, _ = session.upload(table.writer_floor_enabled)
+            buf_row_gate, _ = session.upload(table.writer_row_gate)
+        buf_working, working_view = session.alloc(np.float32, (height, width, 4))
+        buf_aux, _aux_view = session.alloc(np.float32, (height, width))
+        buf_score, score_view = session.alloc(np.float32, (height, width))
+        buf_waux, _waux_view = session.alloc(np.float32, (height, width))
+        buf_wrgb, _wrgb_view = session.alloc(np.float32, (height, width, 3))
+        buf_eligible, eligible_view = session.alloc(np.uint8, (total,))
+        buf_error_flags, error_flags_view = session.alloc(np.uint32, (1,), zero=True)
 
-    # --- device buffers ----------------------------------------------------
-    with timer.cpu("upload.inputs"):
-        buf_rgbi, _ = session.upload(pixels)
-        buf_lut, _ = session.upload(np.ascontiguousarray(response.table))
-        buf_aux_alpha, _ = session.upload(table.aux_alpha)
-        buf_aux_is_one, _ = session.upload(table.aux_alpha_is_one)
-        buf_aux_one_repl, _ = session.upload(table.aux_alpha_one_replacement)
-        buf_aux_offset, _ = session.upload(table.aux_offset)
-        buf_score_base, _ = session.upload(table.score_base_primary)
-        buf_writer_reference, _ = session.upload(table.writer_coarse_reference)
-        buf_floor_enabled, _ = session.upload(table.writer_floor_enabled)
-        buf_row_gate, _ = session.upload(table.writer_row_gate)
-    buf_working, working_view = session.alloc(np.float32, (height, width, 4))
-    buf_aux, _aux_view = session.alloc(np.float32, (height, width))
-    buf_score, score_view = session.alloc(np.float32, (height, width))
-    buf_waux, _waux_view = session.alloc(np.float32, (height, width))
-    buf_wrgb, _wrgb_view = session.alloc(np.float32, (height, width, 3))
-    buf_eligible, eligible_view = session.alloc(np.uint8, (total,))
-    buf_error_flags, error_flags_view = session.alloc(np.uint32, (1,), zero=True)
-
-    horizontal_minimum = int(
-        score_parameters.horizontal_minimum_resolution_cutoff
-        < score_parameters.resolution_metric
-    )
-
-    def _i32(*values: int):
-        return session.upload(np.asarray(values, dtype=np.int32))[0]
-
-    def _f32(*values: float):
-        return session.upload(np.asarray(values, dtype=np.float32))[0]
-
-    def _q64(*values: float):
-        bits = np.asarray(values, dtype=np.float64).view(np.uint64)
-        return session.upload(bits)[0]
-
-    with timer.cpu("device.analysis-planes"):
-        session.run(
-            [
-                (
-                    get_pipeline("k_convert_and_auxiliary"),
-                    [
-                        buf_rgbi,
-                        buf_lut,
-                        buf_aux_alpha,
-                        buf_aux_is_one,
-                        buf_aux_one_repl,
-                        buf_aux_offset,
-                        buf_working,
-                        buf_aux,
-                        _i32(
-                            auxiliary_parameters.selected_visible_channel,
-                            height,
-                            width,
-                        ),
-                    ],
-                    (total,),
-                ),
-                (
-                    get_pipeline("k_score_and_weighted"),
-                    [
-                        buf_aux,
-                        buf_working,
-                        buf_score_base,
-                        buf_score,
-                        buf_waux,
-                        buf_wrgb,
-                        buf_error_flags,
-                        _q64(
-                            float(np.float32(score_parameters.base_addend)),
-                            float(np.float32(score_parameters.scale)),
-                            float(np.float32(score_parameters.offset)),
-                            float(np.float32(score_parameters.floor)),
-                        ),
-                        _i32(horizontal_minimum, height, width),
-                    ],
-                    (total,),
-                ),
-                (
-                    get_pipeline("k_decision_eligibility"),
-                    [
-                        buf_aux,
-                        buf_score,
-                        buf_row_gate,
-                        buf_floor_enabled,
-                        buf_eligible,
-                        _f32(np.float32(decision_parameters.sample_threshold)),
-                        _i32(
-                            decision_parameters.count_limit,
-                            decision_parameters.perpendicular_radius,
-                            height,
-                            width,
-                        ),
-                    ],
-                    (total,),
-                ),
-            ]
-        )
-    _check_cancelled()
-
-    with timer.cpu("host.compact-selected"):
-        selected = np.flatnonzero(eligible_view).astype(np.int64)
-        selected_count = int(selected.size)
-        buf_selected, _ = session.upload(
-            selected if selected_count else np.zeros(1, dtype=np.int64)
+        horizontal_minimum = int(
+            score_parameters.horizontal_minimum_resolution_cutoff
+            < score_parameters.resolution_metric
         )
 
-    buf_attempted, attempted_view = session.alloc(
-        np.uint8, (max(selected_count, 1),), zero=True
-    )
-    buf_candidate, candidate_view = session.alloc(
-        np.float64, (max(selected_count, 1) * 3,), zero=True
-    )
-    buf_original, _original_view = session.alloc(
-        np.float32, (max(selected_count, 1) * 3,), zero=True
-    )
-    with timer.cpu("device.features-combine"):
-        if selected_count:
+        def _i32(*values: int):
+            return session.upload(np.asarray(values, dtype=np.int32))[0]
+
+        def _f32(*values: float):
+            return session.upload(np.asarray(values, dtype=np.float32))[0]
+
+        def _q64(*values: float):
+            bits = np.asarray(values, dtype=np.float64).view(np.uint64)
+            return session.upload(bits)[0]
+
+        with timer.cpu("device.analysis-planes"):
             session.run(
                 [
                     (
-                        get_pipeline("k_features_and_combine"),
+                        get_pipeline("k_convert_and_auxiliary"),
                         [
-                            buf_selected,
+                            buf_rgbi,
+                            buf_lut,
+                            buf_aux_alpha,
+                            buf_aux_is_one,
+                            buf_aux_one_repl,
+                            buf_aux_offset,
+                            buf_working,
+                            buf_aux,
+                            _i32(
+                                auxiliary_parameters.selected_visible_channel,
+                                height,
+                                width,
+                            ),
+                        ],
+                        (total,),
+                    ),
+                    (
+                        get_pipeline("k_score_and_weighted"),
+                        [
+                            buf_aux,
+                            buf_working,
+                            buf_score_base,
                             buf_score,
                             buf_waux,
                             buf_wrgb,
+                            buf_error_flags,
+                            _q64(
+                                float(np.float32(score_parameters.base_addend)),
+                                float(np.float32(score_parameters.scale)),
+                                float(np.float32(score_parameters.offset)),
+                                float(np.float32(score_parameters.floor)),
+                            ),
+                            _i32(horizontal_minimum, height, width),
+                        ],
+                        (total,),
+                    ),
+                    (
+                        get_pipeline("k_decision_eligibility"),
+                        [
                             buf_aux,
-                            buf_working,
-                            buf_writer_reference,
-                            buf_floor_enabled,
+                            buf_score,
                             buf_row_gate,
-                            session.upload(
-                                np.asarray(
-                                    reconstruction_parameters.coarse_slopes,
-                                    dtype=np.float32,
-                                )
-                            )[0],
-                            session.upload(
-                                np.asarray(
-                                    reconstruction_parameters.band_enabled,
-                                    dtype=np.uint8,
-                                )
-                            )[0],
-                            session.upload(
-                                np.asarray(
-                                    reconstruction_parameters.band_scales,
-                                    dtype=np.float32,
-                                )
-                            )[0],
-                            session.upload(
-                                np.asarray(
-                                    reconstruction_parameters.factors_a,
-                                    dtype=np.float32,
-                                ).reshape(-1)
-                            )[0],
-                            session.upload(
-                                np.asarray(
-                                    reconstruction_parameters.factors_b,
-                                    dtype=np.float32,
-                                ).reshape(-1)
-                            )[0],
-                            session.upload(
-                                np.asarray(
-                                    reconstruction_parameters.configured_strengths,
-                                    dtype=np.float32,
-                                )
-                            )[0],
-                            buf_attempted,
-                            buf_candidate,
-                            buf_original,
+                            buf_floor_enabled,
+                            buf_eligible,
+                            _f32(np.float32(decision_parameters.sample_threshold)),
                             _i32(
-                                selected_count,
+                                decision_parameters.count_limit,
+                                decision_parameters.perpendicular_radius,
                                 height,
                                 width,
-                                int(mode is FeatureBandExtremaMode.CROSS_NEIGHBOR),
-                                int(bool(reconstruction_parameters.coarse_enabled)),
                             ),
-                            _f32(np.float32(score_parameters.floor)),
+                        ],
+                        (total,),
+                    ),
+                ]
+            )
+        _check_cancelled()
+
+        with timer.cpu("host.compact-selected"):
+            selected = np.flatnonzero(eligible_view).astype(np.int64)
+            selected_count = int(selected.size)
+            buf_selected, _ = session.upload(
+                selected if selected_count else np.zeros(1, dtype=np.int64)
+            )
+
+        buf_attempted, attempted_view = session.alloc(
+            np.uint8, (max(selected_count, 1),), zero=True
+        )
+        buf_candidate, candidate_view = session.alloc(
+            np.float64, (max(selected_count, 1) * 3,), zero=True
+        )
+        buf_original, _original_view = session.alloc(
+            np.float32, (max(selected_count, 1) * 3,), zero=True
+        )
+        with timer.cpu("device.features-combine"):
+            if selected_count:
+                session.run(
+                    [
+                        (
+                            get_pipeline("k_features_and_combine"),
+                            [
+                                buf_selected,
+                                buf_score,
+                                buf_waux,
+                                buf_wrgb,
+                                buf_aux,
+                                buf_working,
+                                buf_writer_reference,
+                                buf_floor_enabled,
+                                buf_row_gate,
+                                session.upload(
+                                    np.asarray(
+                                        reconstruction_parameters.coarse_slopes,
+                                        dtype=np.float32,
+                                    )
+                                )[0],
+                                session.upload(
+                                    np.asarray(
+                                        reconstruction_parameters.band_enabled,
+                                        dtype=np.uint8,
+                                    )
+                                )[0],
+                                session.upload(
+                                    np.asarray(
+                                        reconstruction_parameters.band_scales,
+                                        dtype=np.float32,
+                                    )
+                                )[0],
+                                session.upload(
+                                    np.asarray(
+                                        reconstruction_parameters.factors_a,
+                                        dtype=np.float32,
+                                    ).reshape(-1)
+                                )[0],
+                                session.upload(
+                                    np.asarray(
+                                        reconstruction_parameters.factors_b,
+                                        dtype=np.float32,
+                                    ).reshape(-1)
+                                )[0],
+                                session.upload(
+                                    np.asarray(
+                                        reconstruction_parameters.configured_strengths,
+                                        dtype=np.float32,
+                                    )
+                                )[0],
+                                buf_attempted,
+                                buf_candidate,
+                                buf_original,
+                                _i32(
+                                    selected_count,
+                                    height,
+                                    width,
+                                    int(mode is FeatureBandExtremaMode.CROSS_NEIGHBOR),
+                                    int(bool(reconstruction_parameters.coarse_enabled)),
+                                ),
+                                _f32(np.float32(score_parameters.floor)),
+                            ],
+                            (selected_count,),
+                        )
+                    ]
+                )
+        _check_cancelled()
+
+        # The writer chain runs on one host CPU core via the compiled fast_cpu
+        # path, exactly as the CUDA backend does: the per-selected-site
+        # attempted/candidate arrays feed the same write_band already proven
+        # byte-exact against this reference.  Unified memory makes the transfer
+        # a view, not a copy.
+        low64 = float(np.float32(dither_bounds.low))
+        high64 = float(np.float32(dither_bounds.high))
+        low_lt_high = low64 < high64
+        dither_scales_array = np.asarray(
+            reconstruction_parameters.dither_scales, dtype=np.float32
+        )
+        state_in = int(active_generator.state)
+        with timer.cpu("host.writer-chain"):
+            (
+                values_at_selected,
+                written_at_selected,
+                advances,
+                final_state,
+            ) = run_writer_chain(
+                fast_kernels,
+                selected=selected,
+                attempted=attempted_view[:selected_count],
+                candidate=candidate_view[: selected_count * 3].reshape(
+                    selected_count, 3
+                ),
+                working_all=working_view,
+                floor_enabled_rows=table.writer_floor_enabled,
+                width=width,
+                state_in=state_in,
+                low64=low64,
+                high64=high64,
+                low_lt_high=low_lt_high,
+                dither_scales=dither_scales_array,
+            )
+            buf_values, _ = session.upload(
+                np.ascontiguousarray(values_at_selected.reshape(-1), dtype=np.float32)
+                if selected_count
+                else np.zeros(3, dtype=np.float32)
+            )
+            buf_written, _ = session.upload(
+                written_at_selected
+                if selected_count
+                else np.zeros(1, dtype=np.uint8)
+            )
+        _check_cancelled()
+
+        buf_work_output, _work_output_view = session.alloc(
+            np.float32, (height, width, 3)
+        )
+        buf_out, out_view = session.alloc(np.uint16, (height, width, 3))
+        buf_factor_high, _ = session.upload(factors.high)
+        buf_factor_low, _ = session.upload(factors.low)
+        buf_counters, counters_view = session.alloc(np.uint32, (3,), zero=True)
+        with timer.cpu("device.assemble-emit"):
+            launches = [
+                (
+                    get_pipeline("k_copy_visible"),
+                    [buf_working, buf_work_output, _i32(total)],
+                    (total,),
+                )
+            ]
+            if selected_count:
+                launches.append(
+                    (
+                        get_pipeline("k_scatter_values"),
+                        [
+                            buf_selected,
+                            buf_values,
+                            buf_work_output,
+                            buf_error_flags,
+                            _i32(selected_count),
                         ],
                         (selected_count,),
                     )
-                ]
-            )
-    _check_cancelled()
-
-    # The writer chain runs on one host CPU core via the compiled fast_cpu
-    # path, exactly as the CUDA backend does: the per-selected-site
-    # attempted/candidate arrays feed the same write_band already proven
-    # byte-exact against this reference.  Unified memory makes the transfer
-    # a view, not a copy.
-    low64 = float(np.float32(dither_bounds.low))
-    high64 = float(np.float32(dither_bounds.high))
-    low_lt_high = low64 < high64
-    dither_scales_array = np.asarray(
-        reconstruction_parameters.dither_scales, dtype=np.float32
-    )
-    state_in = int(active_generator.state)
-    with timer.cpu("host.writer-chain"):
-        (
-            values_at_selected,
-            written_at_selected,
-            advances,
-            final_state,
-        ) = run_writer_chain(
-            fast_kernels,
-            selected=selected,
-            attempted=attempted_view[:selected_count],
-            candidate=candidate_view[: selected_count * 3].reshape(
-                selected_count, 3
-            ),
-            working_all=working_view,
-            floor_enabled_rows=table.writer_floor_enabled,
-            width=width,
-            state_in=state_in,
-            low64=low64,
-            high64=high64,
-            low_lt_high=low_lt_high,
-            dither_scales=dither_scales_array,
-        )
-        buf_values, _ = session.upload(
-            np.ascontiguousarray(values_at_selected.reshape(-1), dtype=np.float32)
-            if selected_count
-            else np.zeros(3, dtype=np.float32)
-        )
-        buf_written, _ = session.upload(
-            written_at_selected
-            if selected_count
-            else np.zeros(1, dtype=np.uint8)
-        )
-    _check_cancelled()
-
-    buf_work_output, _work_output_view = session.alloc(
-        np.float32, (height, width, 3)
-    )
-    buf_out, out_view = session.alloc(np.uint16, (height, width, 3))
-    buf_factor_high, _ = session.upload(factors.high)
-    buf_factor_low, _ = session.upload(factors.low)
-    buf_counters, counters_view = session.alloc(np.uint32, (3,), zero=True)
-    with timer.cpu("device.assemble-emit"):
-        launches = [
-            (
-                get_pipeline("k_copy_visible"),
-                [buf_working, buf_work_output, _i32(total)],
-                (total,),
-            )
-        ]
-        if selected_count:
-            launches.append(
-                (
-                    get_pipeline("k_scatter_values"),
-                    [
-                        buf_selected,
-                        buf_values,
-                        buf_work_output,
-                        buf_error_flags,
-                        _i32(selected_count),
-                    ],
-                    (selected_count,),
                 )
-            )
-        launches.append(
-            (
-                get_pipeline("k_emit_rgb16"),
-                [
-                    buf_work_output,
-                    buf_factor_high,
-                    buf_factor_low,
-                    buf_out,
-                    _i32(total * 3),
-                ],
-                (total * 3,),
-            )
-        )
-        if selected_count:
             launches.append(
                 (
-                    get_pipeline("k_site_counters"),
+                    get_pipeline("k_emit_rgb16"),
                     [
-                        buf_attempted,
-                        buf_values,
-                        buf_original,
-                        buf_written,
+                        buf_work_output,
                         buf_factor_high,
                         buf_factor_low,
-                        buf_counters,
-                        _i32(selected_count),
+                        buf_out,
+                        _i32(total * 3),
                     ],
-                    (selected_count,),
+                    (total * 3,),
                 )
             )
-        session.run(launches)
-    _check_cancelled()
-
-    error_flags = int(error_flags_view[0])
-    if error_flags & 1:
-        raise ValueError("auxiliary score input must be a finite HxW plane")
-    if error_flags & 2:
-        raise ValueError("work RGB must be finite")
-    with timer.cpu("download.output"):
-        host_out = np.array(out_view)
-    counters = np.array(counters_view)
-
-    if _diagnostic_score_plane is not None:
-        if _diagnostic_at_floor_mask is None or _diagnostic_changed_mask is None:
-            raise ValueError("all Metal diagnostic buffers must be provided")
-        with timer.cpu("download.diagnostics"):
-            _diagnostic_score_plane[...] = score_view
-            np.equal(
-                _diagnostic_score_plane,
-                np.float32(score_parameters.floor),
-                out=_diagnostic_at_floor_mask,
-            )
-            bytes_per_working_row = width * 4 * np.dtype(np.float32).itemsize
-            rows_per_chunk = max(
-                1,
-                min(height, (8 << 20) // bytes_per_working_row),
-            )
-            for row_start in range(0, height, rows_per_chunk):
-                row_stop = min(height, row_start + rows_per_chunk)
-                working_chunk = np.array(working_view[row_start:row_stop])
-                noop_chunk = emit_public_rgb16(
-                    working_chunk[:, :, :3],
-                    factors=factors,
+            if selected_count:
+                launches.append(
+                    (
+                        get_pipeline("k_site_counters"),
+                        [
+                            buf_attempted,
+                            buf_values,
+                            buf_original,
+                            buf_written,
+                            buf_factor_high,
+                            buf_factor_low,
+                            buf_counters,
+                            _i32(selected_count),
+                        ],
+                        (selected_count,),
+                    )
                 )
-                np.any(
-                    host_out[row_start:row_stop] != noop_chunk,
-                    axis=2,
-                    out=_diagnostic_changed_mask[row_start:row_stop],
+            session.run(launches)
+        _check_cancelled()
+
+        error_flags = int(error_flags_view[0])
+        if error_flags & 1:
+            raise ValueError("auxiliary score input must be a finite HxW plane")
+        if error_flags & 2:
+            raise ValueError("work RGB must be finite")
+        with timer.cpu("download.output"):
+            host_out = np.array(out_view)
+        counters = np.array(counters_view)
+
+        if _diagnostic_score_plane is not None:
+            if _diagnostic_at_floor_mask is None or _diagnostic_changed_mask is None:
+                raise ValueError("all Metal diagnostic buffers must be provided")
+            with timer.cpu("download.diagnostics"):
+                _diagnostic_score_plane[...] = score_view
+                np.equal(
+                    _diagnostic_score_plane,
+                    np.float32(score_parameters.floor),
+                    out=_diagnostic_at_floor_mask,
                 )
-                _check_cancelled()
+                bytes_per_working_row = width * 4 * np.dtype(np.float32).itemsize
+                rows_per_chunk = max(
+                    1,
+                    min(height, (8 << 20) // bytes_per_working_row),
+                )
+                for row_start in range(0, height, rows_per_chunk):
+                    row_stop = min(height, row_start + rows_per_chunk)
+                    working_chunk = np.array(working_view[row_start:row_stop])
+                    noop_chunk = emit_public_rgb16(
+                        working_chunk[:, :, :3],
+                        factors=factors,
+                    )
+                    np.any(
+                        host_out[row_start:row_stop] != noop_chunk,
+                        axis=2,
+                        out=_diagnostic_changed_mask[row_start:row_stop],
+                    )
+                    _check_cancelled()
 
-    output[:] = host_out
-    with timer.cpu("host.sha256"):
-        output_hash = hashlib.sha256(
-            host_out.astype("<u2", copy=False).tobytes(order="C")
-        ).hexdigest()
-    active_generator.state = final_state
-    if progress is not None:
-        progress(height, height, int(counters[0]), int(counters[1]))
+        output[:] = host_out
+        with timer.cpu("host.sha256"):
+            output_hash = hashlib.sha256(
+                host_out.astype("<u2", copy=False).tobytes(order="C")
+            ).hexdigest()
+        active_generator.state = final_state
+        if progress is not None:
+            progress(height, height, int(counters[0]), int(counters[1]))
 
-    return StreamingReplayResult(
-        shape=(height, width, 3),
-        startup=startup,
-        attempted_pixels=int(counters[0]),
-        written_pixels=int(counters[1]),
-        public_rng_advances=advances,
-        final_rng_state=final_state,
-        output_sha256=output_hash,
-        changed_pixels=int(counters[2]),
-    )
+        return StreamingReplayResult(
+            shape=(height, width, 3),
+            startup=startup,
+            attempted_pixels=int(counters[0]),
+            written_pixels=int(counters[1]),
+            public_rng_advances=advances,
+            final_rng_state=final_state,
+            output_sha256=output_hash,
+            changed_pixels=int(counters[2]),
+        )
+    finally:
+        # See _Session.release: pyobjc leaves one retained reference per
+        # buffer/queue this session created, so every replay call must
+        # release explicitly - on the normal return path and on every
+        # cancellation/error exit alike - or Metal working-set headroom
+        # never recovers between frames.
+        session.release()
