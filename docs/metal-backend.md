@@ -179,6 +179,15 @@ The synthetic suites run wherever a Metal device is present and skip with a
 reason elsewhere; continuous integration does not currently exercise a
 Metal device, so the receipts above are the arm64 validation host's.
 
+Both complete-frame receipts are regenerable. `tools/mint_parity_receipt.py`
+re-mints them from the private fixtures and compares the result against the
+checked-in file; re-run on 2026-07-26 it reproduced every binding field of
+`metal-frame1-parity.json` and `metal-frame2-parity.json` exactly — output
+hash, all four pixel counters, both RNG figures, the startup receipt, and
+both raw RGBI16 input hashes. See
+[`validation.md`](validation.md#regenerating-a-receipt) for the fixture
+manifest and the commands, including the pytest entry point.
+
 ## Files
 
 | Path | Contents |
@@ -188,3 +197,6 @@ Metal device, so the receipts above are the arm64 validation host's.
 | `src/portable_digital_ice/metal_backend/engine.py` | streaming-replay mirror |
 | `src/portable_digital_ice/metal_backend/producer.py` | producer schedule |
 | `evidence/metal-frame-*.json` | full-frame parity receipts |
+| `tools/mint_parity_receipt.py` | mints and re-verifies those receipts |
+| `tools/dice_fixture_format.py` | strict reader for the private fixture pair |
+| `tests/test_full_frame_receipts.py` | pytest entry point and fail-closed tests |

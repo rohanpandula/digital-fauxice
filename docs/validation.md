@@ -78,6 +78,98 @@ Registered high-pass correlation between frame 1 and frame 2 was 0.003436. A
 known repeat capture of frame 1 measured 0.617244. This check rejects a renamed
 or lightly shifted duplicate as the independent validation frame.
 
+## Regenerating a receipt
+
+[`tools/mint_parity_receipt.py`](../tools/mint_parity_receipt.py) mints the
+complete-frame parity receipts and re-verifies a checked-in one. It produces
+the `evidence/` files in the format they are checked in, and reproduces the
+existing Metal ones exactly, so a receipt can be regenerated and audited
+instead of taken on trust.
+
+The private captures are not redistributable and are not in this repository.
+Point the script at them with a fixture manifest, either `--fixtures` or the
+`PORTABLE_DICE_FIXTURE_MANIFEST` environment variable;
+[`tools/fixtures.example.json`](../tools/fixtures.example.json) documents
+every field. Each case names two files:
+
+| Role | File | Contents |
+|---|---|---|
+| main | `<case>/main.dicein1` | the main-pass RGBI16 acquisition |
+| prepass | `<case>/prepass.dicepp1` | the prepass acquisition and its variant table |
+
+Paths in the manifest resolve against its `workspace_root` (or
+`--workspace-root`). The Nikon oracle is not needed to mint these receipts:
+parity is established against the in-process baseline backend and bound to
+`expected_logical_output_sha256`, the oracle-matched CPU-reference hash the
+original gates recorded.
+
+Re-verify the checked-in Metal receipt for frame 1:
+
+```sh
+python tools/mint_parity_receipt.py --case frame1 --backend metal \
+    --fixtures /path/to/manifest.json
+```
+
+The script runs the baseline backend and the candidate backend in one process
+over identical input bytes, compares them with the package's own
+`_parity_failures` comparator plus a full-frame delta sweep, re-runs the
+candidate to prove consecutive-run determinism, and prints the minted
+receipt. Without `--out` it writes nothing, so a checked-in receipt is never
+overwritten by accident. Without `--verify` it compares against the
+`evidence/` file for that backend and case and exits non-zero on any
+difference in a binding field.
+
+It fails closed with exit 2, before running anything, when the manifest is
+missing or unreadable, its schema is unknown, the case is unknown, a fixture
+is absent, a fixture's SHA-256 does not match its pin, or two fixture roles
+turn out to be the same file. It never writes a partial or empty receipt.
+
+The same gate runs under pytest:
+
+```sh
+PORTABLE_DICE_FIXTURE_MANIFEST=/path/to/manifest.json \
+    pytest tests/test_full_frame_receipts.py
+```
+
+Without that variable the complete-frame tests skip and say why. Everything
+else in that file — the DICEIN1/DICEPP1 reader against synthetic fixtures
+built in the test, and every fail-closed leg of the minting script — runs in
+ordinary continuous integration with no private data.
+
+### What is reproduced, and what is not
+
+`--verify` compares the fields that carry the claim: status, geometry, sample
+count, the four mismatch and delta counters, `diagnostics_planes_equal`, the
+output hash, `attempted_pixels`, `written_pixels`, `changed_pixels`,
+`public_rng_advances`, `final_rng_state`, `startup_rng_advances_per_stage`,
+both fixture hashes, and both raw RGBI16 input hashes. Prose, wall times,
+host details, and the gate-check tally are excluded: they vary by machine and
+do not carry the claim. Fields an older receipt never recorded are reported
+as not compared rather than counted as agreement, and a verify pass that
+compared nothing is a failure, not a success.
+
+Verified 2026-07-26 on the arm64 validation host (Apple M4, macOS 26.5.2,
+Python 3.13.5, numpy 2.4.6, numba 0.66.0, pyobjc 12.2.1): `--backend metal`
+re-mints both `metal-frame1-parity.json` and `metal-frame2-parity.json` with
+all 19 comparable binding fields identical and 28 of 28 named gate checks
+passing, and its `source_manifest_sha256` equals the 31-file value those
+receipts record in their re-verification block.
+
+`--backend cuda` needs an NVIDIA device and has not been re-run since the
+CUDA receipts were minted. `--backend cpu-fast --baseline cpu` runs the exact
+CPU reference and takes about an hour per frame.
+
+### Why this script exists
+
+The scripts that minted the original receipts were never checked in — for the
+CUDA and cpu-fast receipts as well as the Metal ones, and including the
+re-verification after the Metal session-leak fix. The 32-file source manifest
+the Metal receipts pin included the minting script itself, which is how its
+absence became visible: the 31-file re-verification manifest is the same
+scope with the script removed. This script closes that gap. It lives in the
+repository, is covered by tests, and records its own SHA-256 in every receipt
+it mints under `minted_by`.
+
 ## What the receipts do not prove
 
 Two complete frames do not establish every film stock, defect shape, scanner

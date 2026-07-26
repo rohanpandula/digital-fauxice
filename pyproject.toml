@@ -41,3 +41,6 @@ portable_digital_ice = ["_source_pyproject.toml"]
 addopts = "-q"
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+    "slow: complete-frame gates; need the private fixtures and minutes to run",
+]
