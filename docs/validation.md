@@ -155,9 +155,18 @@ all 19 comparable binding fields identical and 28 of 28 named gate checks
 passing, and its `source_manifest_sha256` equals the 31-file value those
 receipts record in their re-verification block.
 
+The same day, `--backend cpu-fast --baseline cpu` re-minted
+`cpu-fast-frame-1-parity.json` against the exact CPU reference, 28 of 28
+checks, with all 15 comparable binding fields identical; the four fields that
+receipt predates were reported as not compared rather than counted as
+agreement. That run matters beyond the receipt: the Metal claim is
+hash-transitive through the CPU-reference output hash, and this is the CPU
+reference itself re-deriving `c3ee49f4…6ad7` on the same host, so the chain
+no longer rests only on the earlier receipts. It took 2,537.8 seconds
+against the compiled backend's 10.0.
+
 `--backend cuda` needs an NVIDIA device and has not been re-run since the
-CUDA receipts were minted. `--backend cpu-fast --baseline cpu` runs the exact
-CPU reference and takes about an hour per frame.
+CUDA receipts were minted.
 
 ### Why this script exists
 
