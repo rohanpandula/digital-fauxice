@@ -639,6 +639,12 @@ def verify_against(
     An uncomparable field is not a difference.  The earlier receipts predate
     the raw-input hashes, and a newer receipt carrying more evidence than an
     older one does not contradict it.
+
+    The output-hash field is named after both backends, so a receipt minted
+    against a different baseline carries a differently named key.  Collect
+    those keys from *both* sides: taking them only from the minted receipt
+    would let the single most important field go silently uncompared when
+    the baselines differ.
     """
 
     reference = json.loads(reference_path.read_text(encoding="utf-8"))
@@ -647,13 +653,19 @@ def verify_against(
     uncomparable: list[str] = []
     fields = list(BINDING_FIELDS)
     fields.extend(
-        key for key in receipt if key.endswith("_output_sha256") and key not in fields
+        sorted(
+            {
+                key
+                for source in (receipt, reference)
+                for key in source
+                if key.endswith("_output_sha256") and key not in fields
+            }
+        )
     )
     for field in fields:
-        if field not in receipt:
-            continue
-        if field not in reference:
-            uncomparable.append(field)
+        if field not in receipt or field not in reference:
+            if field in receipt or field in reference:
+                uncomparable.append(field)
             continue
         compared.append(field)
         if receipt[field] != reference[field]:

@@ -433,6 +433,45 @@ def test_checked_in_metal_receipt_carries_every_binding_field(case: str) -> None
     assert "cpu_fast_and_metal_output_sha256" in receipt
 
 
+def test_verify_surfaces_an_output_hash_key_mismatch() -> None:
+    """A differently named output hash must never go silently uncompared.
+
+    The key is named after both backends, so a receipt minted against a
+    different baseline carries a different key. Collecting keys only from
+    the minted receipt would drop the most important field on the floor and
+    still report success.
+    """
+
+    reference = EVIDENCE / "cuda-frame-1-parity.json"
+    minted = json.loads(reference.read_text(encoding="utf-8"))
+    minted["cpu_fast_and_cuda_output_sha256"] = minted.pop(
+        "cpu_and_cuda_output_sha256"
+    )
+    differences, compared, uncomparable = mint.verify_against(minted, reference)
+    assert not differences
+    assert "cpu_and_cuda_output_sha256" not in compared
+    assert set(uncomparable) >= {
+        "cpu_and_cuda_output_sha256",
+        "cpu_fast_and_cuda_output_sha256",
+    }
+
+
+def test_verify_compares_a_matching_output_hash_key() -> None:
+    reference = EVIDENCE / "cuda-frame-1-parity.json"
+    minted = json.loads(reference.read_text(encoding="utf-8"))
+    differences, compared, _ = mint.verify_against(minted, reference)
+    assert not differences
+    assert "cpu_and_cuda_output_sha256" in compared
+
+
+def test_verify_reports_a_changed_value_as_a_difference() -> None:
+    reference = EVIDENCE / "metal-frame1-parity.json"
+    minted = json.loads(reference.read_text(encoding="utf-8"))
+    minted["final_rng_state"] = minted["final_rng_state"] + 1
+    differences, _, _ = mint.verify_against(minted, reference)
+    assert any(difference.startswith("final_rng_state:") for difference in differences)
+
+
 def test_source_manifest_recipe_matches_the_pinned_scope() -> None:
     """The receipts pin a source manifest; the tool must build the same one."""
 
