@@ -191,12 +191,25 @@ its fixtures and matched against its checked-in values.
 
 The scripts that minted the original receipts were never checked in — for the
 CUDA and cpu-fast receipts as well as the Metal ones, and including the
-re-verification after the Metal session-leak fix. The 32-file source manifest
-the Metal receipts pin included the minting script itself, which is how its
-absence became visible: the 31-file re-verification manifest is the same
-scope with the script removed. This script closes that gap. It lives in the
-repository, is covered by tests, and records its own SHA-256 in every receipt
-it mints under `minted_by`.
+re-verification after the Metal session-leak fix. This script closes that
+gap. It lives in the repository, is covered by tests, and records its own
+SHA-256 in every receipt it mints under `minted_by`.
+
+The cost of that history shows up in the source manifests the Metal receipts
+pin. The 31-file value in their re-verification block is reproducible: it is
+a SHA-256 over the compact sorted JSON mapping each
+`src/portable_digital_ice/**/*.py` path to its file hash, and
+`tools/mint_parity_receipt.py` recomputes it exactly. The original 32-file
+value is not. No combination of the candidate tree states (the commit that
+added those receipts, its parent, the release, and the leak fix) with the
+plausible recipes (that JSON form over the sources, with or without
+`pyproject.toml`, and the line-record form used by
+`fauxce_hybrid.cache.compute_core_source_manifest`) reproduces it, so what
+the thirty-second record was cannot be established from this repository.
+The re-verification note reads as though the missing record was the minting
+script itself, but that is one reading of an ambiguous sentence and it is not
+evidence. Receipts minted from here on record their scope explicitly in
+`source_manifest_scope`.
 
 ## What the receipts do not prove
 
