@@ -8,8 +8,11 @@ changed-pixel accounting, the number of public RNG advances, the final RNG
 state, the per-stage hidden-startup RNG advances, and all three diagnostics
 planes, compared sample by sample against this package's CPU reference on
 both complete validation frames. The receipts are checked in under
-[`evidence/`](../evidence/) (`cpu-fast-frame-*-parity.json`) and bind this
-tree's current source manifest.
+[`evidence/`](../evidence/) (`cpu-fast-frame-*-parity.json`) and bind the
+source manifest of the tree they were minted on. The pipelined-writer tree
+reproduced both frames' receipt output hashes and counters exactly, but its
+own receipt mint is still pending, so the checked-in receipts do not yet
+name this tree's manifest.
 
 ## Install
 
@@ -63,9 +66,10 @@ reference directly.
 The kernels are a line-by-line translation of the reference modules with the
 same widening, rounding, and store schedule:
 
-- default `@njit` only: no fastmath, no contraction of multiply/add pairs
-  into FMA (verified by a permanent contraction canary in the test suite),
-  no reassociated reductions;
+- `@njit` with `nogil=True` and nothing else: no fastmath, no contraction
+  of multiply/add pairs into FMA (verified by a permanent contraction
+  canary in the test suite), no reassociated reductions -- releasing the
+  GIL changes thread scheduling only, never code generation;
 - binary64 arithmetic with one rounding per written operation, and float32
   narrowing only at the reference's recorded store boundaries;
 - the logarithmic response LUT and the output factor tables come from the
@@ -78,6 +82,15 @@ same widening, rounding, and store schedule:
   results are byte-identical for every thread count: outputs, digests, and
   counters were verified equal under `NUMBA_NUM_THREADS=1`, `3`, and the
   machine default, and across repeated runs;
+- the next band's analysis kernel runs on one worker thread while the main
+  thread writes, emits, and digests the current band. The overlap cannot
+  change a byte: the writer never mutates the planes the analysis reads,
+  analysis outputs are double-buffered per band and consumed only behind
+  the worker's completion barrier, and the LCG state still threads through
+  `write_band` calls in strict band order on one thread. Both full
+  validation frames reproduced their receipt output hashes, counters, and
+  RNG accounting exactly under the overlapped schedule, again at every
+  swept thread count;
 - the strictly ordered producer-schedule accumulation and the six-stage
   hidden startup replay are compiled ports of the same reference order,
   each covered by dedicated byte-parity tests.
@@ -97,8 +110,22 @@ complete 5,782 x 3,946 native frame, warm process:
 | Full frame wall time (single thread) | 21.5 - 23.0 s |
 | Reference CPU wall time, same frames | 3,545.7 / 4,183.4 s |
 | Speedup vs reference (default threads) | about 400x |
-| CUDA backend, same frames, for context | 22.8 / 23.6 s |
+| CUDA backend, same frames, for context | 6.3 / 5.5 s |
 | Repeated-run output hash | identical (deterministic) |
+
+The CUDA context row quotes the checked-in CUDA receipts minted after the
+writer chain moved to a host CPU core (`cuda-frame-*-parity.json`,
+`cuda_runtime.elapsed_seconds` 6.314 and 5.462).
+
+The wall-time rows above predate the analysis/writer overlap and measure
+the sequential schedule on a quiet host. The overlap hides the serial
+writer and emit behind the parallel analysis; the stage split measured on
+validation frame 1 under heavy host load (1-minute load average about 14
+on 10 cores) was 8.9 s of analysis on the worker thread against 1.2 s of
+writing and 1.7 s of emit on the main thread, so the expected quiet-host
+saving is roughly the writer-plus-emit time per frame. A quiet-host
+wall-time re-measurement has not been captured yet, and no smaller number
+is claimed until it is.
 
 The compiled path materializes whole-image analysis planes instead of the
 reference's eleven-row streaming window, so peak host memory scales with

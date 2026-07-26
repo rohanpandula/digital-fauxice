@@ -1067,7 +1067,7 @@ def analyze_row(
     return attempted
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=True, parallel=True, nogil=True)
 def analyze_band(
     auxiliary_all,
     score_all,
@@ -1136,7 +1136,7 @@ def analyze_band(
         )
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def write_band(
     out_attempted,
     out_candidates,

@@ -6,7 +6,11 @@ lookup, auxiliary/score/weighted planes, per-row stage-parameter resolution)
 stay in Python via the reference's own ``_RowCache``; decision eligibility,
 history-window boundary handling, feature records, candidates, and the
 combiner run as one parallel kernel call per band of rows, followed by the
-strictly serial writer.  Emit, digest, and callbacks stay per-row in Python;
+strictly serial writer.  The next band's analysis kernel overlaps the current
+band's writer and emit on one worker thread (both kernels release the GIL);
+the analysis reads only planes no stage mutates and its output is consumed
+behind a barrier, so the schedule change cannot alter a single byte.  Emit,
+digest, and callbacks stay per-row in Python;
 cooperative cancellation is honored per row while the analysis planes are
 prepared and per band during writing.
 
@@ -19,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 import numpy as np
@@ -268,8 +273,9 @@ def run_streaming_replay_fast(
     as the reference does) stay identical Python/NumPy and are materialized
     once into whole-image planes, with the cooperative ``cancelled``
     callback honored per row during that preparation.  Analysis then runs as
-    one parallel kernel call per band of rows (``kernels.analyze_band``)
-    followed by the strictly serial writer (``kernels.write_band``); emit,
+    one parallel kernel call per band of rows (``kernels.analyze_band``),
+    with the next band's analysis overlapping the current band's strictly
+    serial writer (``kernels.write_band``) on one worker thread; emit,
     digest, and callbacks stay per-row in Python, so cancellation during
     writing is honored at band granularity (via the progress callback, as in
     the reference engine).  ``process_cpu_fast`` commits the caller-owned
@@ -437,19 +443,35 @@ def run_streaming_replay_fast(
     output_hash = hashlib.sha256()
     state = int(active_generator.state)
 
-    # Band buffers, reused across bands.  The analysis phase runs one prange
-    # over the band's rows (disjoint writes, zero reductions -- byte-equal
-    # for every thread count); the writer then consumes the band strictly in
-    # row-major order, threading the LCG state.
+    # Band buffers.  The analysis phase runs one prange over the band's rows
+    # (disjoint writes, zero reductions -- byte-equal for every thread
+    # count); the writer then consumes the band strictly in row-major order,
+    # threading the LCG state.  Analysis outputs are double-buffered so the
+    # next band's analysis (a nogil kernel on one worker thread) overlaps the
+    # strictly serial writer, emit, and digest of the current band.  The
+    # writer never mutates the planes the analysis reads and each band's
+    # analysis output is consumed only behind its ``result()`` barrier, so
+    # the overlapped schedule produces the exact bytes of the sequential one.
     band_rows_capacity = min(height, _BAND_ROWS)
-    band_attempted = np.empty((band_rows_capacity, width), dtype=np.uint8)
-    band_candidates = np.empty((band_rows_capacity, width, 3), dtype=np.float64)
-    band_attempted_counts = np.empty(band_rows_capacity, dtype=np.int64)
+    analysis_buffers = tuple(
+        (
+            np.empty((band_rows_capacity, width), dtype=np.uint8),
+            np.empty((band_rows_capacity, width, 3), dtype=np.float64),
+            np.empty(band_rows_capacity, dtype=np.int64),
+        )
+        for _ in range(2)
+    )
     band_values = np.empty((band_rows_capacity, width, 3), dtype=np.float32)
     band_written = np.empty(band_rows_capacity, dtype=np.int64)
     band_advances = np.empty(band_rows_capacity, dtype=np.int64)
 
-    for y0 in range(0, height, band_rows_capacity):
+    def _analyze_band_into(
+        buffers: tuple[
+            npt.NDArray[np.uint8], npt.NDArray[np.float64], npt.NDArray[np.int64]
+        ],
+        y0: int,
+    ) -> int:
+        band_attempted, band_candidates, band_attempted_counts = buffers
         band_rows = min(band_rows_capacity, height - y0)
         kernels.analyze_band(
             auxiliary_all,
@@ -480,46 +502,65 @@ def run_streaming_replay_fast(
             band_candidates,
             band_attempted_counts,
         )
-        state = kernels.write_band(
-            band_attempted,
-            band_candidates,
-            working_all,
-            y0,
-            band_rows,
-            width,
-            floor_enabled_rows,
-            low64,
-            high64,
-            low_lt_high,
-            dither_scales,
-            state,
-            band_values,
-            band_written,
-            band_advances,
-        )
-        # Per-band emit: the digest consumes the same bytes in the same
-        # row-major order as a per-row accumulation, so it is unchanged.
-        band_slice = slice(y0, y0 + band_rows)
-        noop_band = emit_public_rgb16(working_all[band_slice, :, :3], factors=factors)
-        rendered_band = emit_public_rgb16(band_values[:band_rows], factors=factors)
-        output[band_slice] = rendered_band
-        output_hash.update(
-            rendered_band.astype("<u2", copy=False).tobytes(order="C")
-        )
-        changed += int(
-            np.count_nonzero(np.any(rendered_band != noop_band, axis=2))
-        )
-        for i in range(band_rows):
-            y = y0 + i
-            attempted += int(band_attempted_counts[i])
-            written += int(band_written[i])
-            public_advances += int(band_advances[i])
-            if diagnostics_row is not None:
-                diagnostics_row(
-                    y, score_all[y], score_floor, rendered_band[i], noop_band[i]
+        return band_rows
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        pending = executor.submit(_analyze_band_into, analysis_buffers[0], 0)
+        for index, y0 in enumerate(range(0, height, band_rows_capacity)):
+            band_attempted, band_candidates, band_attempted_counts = (
+                analysis_buffers[index % 2]
+            )
+            band_rows = pending.result()
+            next_y0 = y0 + band_rows_capacity
+            if next_y0 < height:
+                pending = executor.submit(
+                    _analyze_band_into, analysis_buffers[(index + 1) % 2], next_y0
                 )
-            if progress is not None:
-                progress(y + 1, height, attempted, written)
+            state = kernels.write_band(
+                band_attempted,
+                band_candidates,
+                working_all,
+                y0,
+                band_rows,
+                width,
+                floor_enabled_rows,
+                low64,
+                high64,
+                low_lt_high,
+                dither_scales,
+                state,
+                band_values,
+                band_written,
+                band_advances,
+            )
+            # Per-band emit: the digest consumes the same bytes in the same
+            # row-major order as a per-row accumulation, so it is unchanged.
+            band_slice = slice(y0, y0 + band_rows)
+            noop_band = emit_public_rgb16(
+                working_all[band_slice, :, :3], factors=factors
+            )
+            rendered_band = emit_public_rgb16(band_values[:band_rows], factors=factors)
+            output[band_slice] = rendered_band
+            output_hash.update(
+                rendered_band.astype("<u2", copy=False).tobytes(order="C")
+            )
+            changed += int(
+                np.count_nonzero(np.any(rendered_band != noop_band, axis=2))
+            )
+            for i in range(band_rows):
+                y = y0 + i
+                attempted += int(band_attempted_counts[i])
+                written += int(band_written[i])
+                public_advances += int(band_advances[i])
+                if diagnostics_row is not None:
+                    diagnostics_row(
+                        y, score_all[y], score_floor, rendered_band[i], noop_band[i]
+                    )
+                if progress is not None:
+                    progress(y + 1, height, attempted, written)
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
 
     active_generator.state = state
     return StreamingReplayResult(
