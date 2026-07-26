@@ -640,29 +640,22 @@ def verify_against(
     the raw-input hashes, and a newer receipt carrying more evidence than an
     older one does not contradict it.
 
-    The output-hash field is named after both backends, so a receipt minted
-    against a different baseline carries a differently named key.  Collect
-    those keys from *both* sides: taking them only from the minted receipt
-    would let the single most important field go silently uncompared when
-    the baselines differ.
+    The output-hash field is named after the two backends that agreed, so a
+    receipt minted against a different baseline carries a differently named
+    key.  It is still the same frame's output hash, so it is compared by
+    value across the two names rather than skipped -- taking the key only
+    from the minted receipt would let the single most important field go
+    silently uncompared whenever the baselines differ.  What binds that hash
+    to the CPU reference is not the key name but the
+    ``candidate_matches_pinned_cpu_reference_output`` gate check.
     """
 
     reference = json.loads(reference_path.read_text(encoding="utf-8"))
     differences: list[str] = []
     compared: list[str] = []
     uncomparable: list[str] = []
-    fields = list(BINDING_FIELDS)
-    fields.extend(
-        sorted(
-            {
-                key
-                for source in (receipt, reference)
-                for key in source
-                if key.endswith("_output_sha256") and key not in fields
-            }
-        )
-    )
-    for field in fields:
+
+    for field in BINDING_FIELDS:
         if field not in receipt or field not in reference:
             if field in receipt or field in reference:
                 uncomparable.append(field)
@@ -672,6 +665,25 @@ def verify_against(
             differences.append(
                 f"{field}: minted={receipt[field]!r} checked-in={reference[field]!r}"
             )
+
+    minted_keys = sorted(key for key in receipt if key.endswith("_output_sha256"))
+    reference_keys = sorted(key for key in reference if key.endswith("_output_sha256"))
+    if len(minted_keys) == 1 and len(reference_keys) == 1:
+        minted_key, reference_key = minted_keys[0], reference_keys[0]
+        label = (
+            minted_key
+            if minted_key == reference_key
+            else f"output_sha256 ({minted_key} vs {reference_key})"
+        )
+        compared.append(label)
+        if receipt[minted_key] != reference[reference_key]:
+            differences.append(
+                f"{label}: minted={receipt[minted_key]!r} "
+                f"checked-in={reference[reference_key]!r}"
+            )
+    else:
+        uncomparable.extend(sorted(set(minted_keys) ^ set(reference_keys)))
+
     return differences, compared, uncomparable
 
 

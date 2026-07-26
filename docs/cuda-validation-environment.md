@@ -26,8 +26,8 @@ ENV PATH=/opt/venv/bin:$PATH
 
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir \
-        "numpy==2.5.1" \
         "cupy-cuda12x" \
+        "numba" \
         "pytest" \
         "pytest-xdist"
 
@@ -35,9 +35,16 @@ WORKDIR /work
 CMD ["/bin/bash"]
 ```
 
-Validated component versions: Python 3.12, NumPy 2.5.1, CuPy 14.1.1
-(`cupy-cuda12x`), CUDA runtime 12.9 (bundled by CuPy), NVRTC options
-`--fmad=false --std=c++17`.
+`numba` is not optional here. Since the writer chain moved to the host
+(`cuda_backend/host_writer.py`), CUDA availability depends on the compiled
+`fast_cpu` kernels, and the backend fails closed with a specific reason
+without them. Installing it resolves numpy to 2.4.6 rather than the 2.5.1
+this file previously pinned, which is why the receipts record 2.4.6; byte
+equality is unaffected, and the package's own tests cover both.
+
+Validated component versions: Python 3.12.3, NumPy 2.4.6, numba 0.66.0,
+CuPy 14.1.1 (`cupy-cuda12x`), CUDA runtime 12.9 (bundled by CuPy), NVRTC
+options `--fmad=false --std=c++17`.
 
 ## Reproducing the public suite
 
@@ -51,7 +58,17 @@ docker run --rm --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all \
 The private full-frame gates additionally mount the hash-pinned fixture pair
 read-only and compare against a CPU-reference output produced by this same
 package; their sanitized results are the `evidence/cuda-*-parity.json`
-receipts.
+receipts. `tools/mint_parity_receipt.py` runs those gates and re-verifies
+the receipts — see
+[`validation.md`](validation.md#regenerating-a-receipt):
+
+```sh
+docker run --rm --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all \
+    -v "$PWD":/work/pdi -v /path/to/fixtures:/fixtures:ro dice-cuda:dev \
+    bash -c "cd /work/pdi && pip install -e . -q && \
+      python tools/mint_parity_receipt.py --case frame1 --backend cuda \
+        --fixtures /work/pdi/manifest.json"
+```
 
 ## Benchmark method
 

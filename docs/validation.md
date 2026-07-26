@@ -148,6 +148,13 @@ do not carry the claim. Fields an older receipt never recorded are reported
 as not compared rather than counted as agreement, and a verify pass that
 compared nothing is a failure, not a success.
 
+The output-hash field is named after the two backends that agreed, so
+re-minting against a different baseline renames it. It is compared by value
+across the two names rather than skipped: it is the same frame's output hash
+either way, and what binds it to the CPU reference is the
+`candidate_matches_pinned_cpu_reference_output` gate check, not the key
+name.
+
 Verified 2026-07-26 on the arm64 validation host (Apple M4, macOS 26.5.2,
 Python 3.13.5, numpy 2.4.6, numba 0.66.0, pyobjc 12.2.1): `--backend metal`
 re-mints both `metal-frame1-parity.json` and `metal-frame2-parity.json` with
@@ -165,8 +172,20 @@ reference itself re-deriving `c3ee49f4…6ad7` on the same host, so the chain
 no longer rests only on the earlier receipts. It took 2,537.8 seconds
 against the compiled backend's 10.0.
 
-`--backend cuda` needs an NVIDIA device and has not been re-run since the
-CUDA receipts were minted.
+`--backend cuda` re-minted `cuda-frame-1-parity.json` and
+`cuda-frame-2-parity.json` the same day on the recorded validation host
+(RTX A4000, driver 610.43.02, the `nvidia/cuda:12.6.3-devel-ubuntu24.04`
+container, Python 3.12.3, numpy 2.4.6, CuPy 14.1.1), 28 of 28 checks each,
+with all 16 comparable binding fields identical. Warm CUDA wall time was
+6.305 s on frame 1 against the 6.314 s that receipt records. Those two
+receipts predate the diagnostics-plane and raw-input fields, so those were
+reported as not compared. Both were re-minted against the compiled
+`cpu-fast` baseline rather than the hour-long reference; the binding to the
+CPU reference is the `candidate_matches_pinned_cpu_reference_output` check,
+which passed in every case.
+
+Every complete-frame receipt under `evidence/` has now been regenerated from
+its fixtures and matched against its checked-in values.
 
 ### Why this script exists
 

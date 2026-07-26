@@ -433,13 +433,14 @@ def test_checked_in_metal_receipt_carries_every_binding_field(case: str) -> None
     assert "cpu_fast_and_metal_output_sha256" in receipt
 
 
-def test_verify_surfaces_an_output_hash_key_mismatch() -> None:
+def test_verify_compares_the_output_hash_across_baselines() -> None:
     """A differently named output hash must never go silently uncompared.
 
-    The key is named after both backends, so a receipt minted against a
-    different baseline carries a different key. Collecting keys only from
-    the minted receipt would drop the most important field on the floor and
-    still report success.
+    The key is named after the two backends that agreed, so re-minting
+    against a different baseline renames it. It is still the same frame's
+    output hash, so it must be compared by value -- collecting the key only
+    from the minted receipt would drop the most important field on the floor
+    and still report success.
     """
 
     reference = EVIDENCE / "cuda-frame-1-parity.json"
@@ -447,13 +448,22 @@ def test_verify_surfaces_an_output_hash_key_mismatch() -> None:
     minted["cpu_fast_and_cuda_output_sha256"] = minted.pop(
         "cpu_and_cuda_output_sha256"
     )
-    differences, compared, uncomparable = mint.verify_against(minted, reference)
+    differences, compared, _ = mint.verify_against(minted, reference)
     assert not differences
-    assert "cpu_and_cuda_output_sha256" not in compared
-    assert set(uncomparable) >= {
-        "cpu_and_cuda_output_sha256",
-        "cpu_fast_and_cuda_output_sha256",
-    }
+    label = next(item for item in compared if item.startswith("output_sha256 ("))
+    assert "cpu_fast_and_cuda_output_sha256" in label
+    assert "cpu_and_cuda_output_sha256" in label
+
+
+def test_verify_catches_a_changed_hash_under_a_renamed_key() -> None:
+    """Renaming the key must not become a way to smuggle a changed hash."""
+
+    reference = EVIDENCE / "cuda-frame-1-parity.json"
+    minted = json.loads(reference.read_text(encoding="utf-8"))
+    minted.pop("cpu_and_cuda_output_sha256")
+    minted["cpu_fast_and_cuda_output_sha256"] = "0" * 64
+    differences, _, _ = mint.verify_against(minted, reference)
+    assert any("output_sha256" in difference for difference in differences)
 
 
 def test_verify_compares_a_matching_output_hash_key() -> None:
