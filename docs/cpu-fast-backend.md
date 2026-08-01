@@ -78,6 +78,11 @@ same widening, rounding, and store schedule:
   results are byte-identical for every thread count: outputs, digests, and
   counters were verified equal under `NUMBA_NUM_THREADS=1`, `3`, and the
   machine default, and across repeated runs;
+- bands are double-buffered so ``analyze_band`` for band *N+1* runs
+  concurrently with ``write_band`` for band *N* (numba releases the GIL
+  during njit calls, so the analysis prange and the sequential writer
+  truly overlap on multi-core hosts); the result order stays row-major
+  and the output is unchanged;
 - the strictly ordered producer-schedule accumulation and the six-stage
   hidden startup replay are compiled ports of the same reference order,
   each covered by dedicated byte-parity tests.
@@ -97,8 +102,12 @@ complete 5,782 x 3,946 native frame, warm process:
 | Full frame wall time (single thread) | 21.5 - 23.0 s |
 | Reference CPU wall time, same frames | 3,545.7 / 4,183.4 s |
 | Speedup vs reference (default threads) | about 400x |
-| CUDA backend, same frames, for context | 22.8 / 23.6 s |
+| CUDA backend, same frames, for context | 5.5 / 6.3 s |
 | Repeated-run output hash | identical (deterministic) |
+
+The default-thread time is from the first release; the
+double-buffered pipelining added later reduces it further when the host has
+more than one core (the single-thread case is unchanged).
 
 The compiled path materializes whole-image analysis planes instead of the
 reference's eleven-row streaming window, so peak host memory scales with

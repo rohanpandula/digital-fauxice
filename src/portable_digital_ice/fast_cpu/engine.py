@@ -10,6 +10,11 @@ strictly serial writer.  Emit, digest, and callbacks stay per-row in Python;
 cooperative cancellation is honored per row while the analysis planes are
 prepared and per band during writing.
 
+Bands are double-buffered so ``analyze_band`` for band *N+1* runs concurrently
+with ``write_band`` for band *N*.  numba releases the GIL during njit calls,
+so the analysis prange and the sequential writer truly overlap on multi-core
+hosts.  The buffers swap every band; result order is row-major and unchanged.
+
 Importing this module never requires numba.  Only calling into the compiled
 kernels does, and that failure is raised as :class:`CpuFastUnavailable` with a
 specific reason instead of silently falling back to a different code path.
@@ -18,6 +23,7 @@ specific reason instead of silently falling back to a different code path.
 from __future__ import annotations
 
 import hashlib
+import threading
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -437,71 +443,120 @@ def run_streaming_replay_fast(
     output_hash = hashlib.sha256()
     state = int(active_generator.state)
 
-    # Band buffers, reused across bands.  The analysis phase runs one prange
-    # over the band's rows (disjoint writes, zero reductions -- byte-equal
-    # for every thread count); the writer then consumes the band strictly in
-    # row-major order, threading the LCG state.
+    # Double-buffered band arrays.  analyze_band for band N+1 targets the
+    # alternate buffer while write_band consumes band N from the current
+    # buffer.  numba releases the GIL during njit calls, so the analysis
+    # prange and the sequential writer truly overlap on multi-core hosts.
     band_rows_capacity = min(height, _BAND_ROWS)
-    band_attempted = np.empty((band_rows_capacity, width), dtype=np.uint8)
-    band_candidates = np.empty((band_rows_capacity, width, 3), dtype=np.float64)
-    band_attempted_counts = np.empty(band_rows_capacity, dtype=np.int64)
-    band_values = np.empty((band_rows_capacity, width, 3), dtype=np.float32)
-    band_written = np.empty(band_rows_capacity, dtype=np.int64)
-    band_advances = np.empty(band_rows_capacity, dtype=np.int64)
 
-    for y0 in range(0, height, band_rows_capacity):
+    _buf_a_att = np.empty((band_rows_capacity, width), dtype=np.uint8)
+    _buf_a_cand = np.empty((band_rows_capacity, width, 3), dtype=np.float64)
+    _buf_a_cnt = np.empty(band_rows_capacity, dtype=np.int64)
+    _buf_a_val = np.empty((band_rows_capacity, width, 3), dtype=np.float32)
+    _buf_a_wr = np.empty(band_rows_capacity, dtype=np.int64)
+    _buf_a_adv = np.empty(band_rows_capacity, dtype=np.int64)
+
+    _buf_b_att = np.empty((band_rows_capacity, width), dtype=np.uint8)
+    _buf_b_cand = np.empty((band_rows_capacity, width, 3), dtype=np.float64)
+    _buf_b_cnt = np.empty(band_rows_capacity, dtype=np.int64)
+    _buf_b_val = np.empty((band_rows_capacity, width, 3), dtype=np.float32)
+    _buf_b_wr = np.empty(band_rows_capacity, dtype=np.int64)
+    _buf_b_adv = np.empty(band_rows_capacity, dtype=np.int64)
+
+    def _band_buf(idx: int):
+        if idx & 1:
+            return (_buf_b_att, _buf_b_cand, _buf_b_cnt,
+                    _buf_b_val, _buf_b_wr, _buf_b_adv)
+        return (_buf_a_att, _buf_a_cand, _buf_a_cnt,
+                _buf_a_val, _buf_a_wr, _buf_a_adv)
+
+    num_bands = (height + band_rows_capacity - 1) // band_rows_capacity
+    _bg_err = [None]
+
+    def _analyze_bg(kernels, **kwargs):
+        try:
+            kernels.analyze_band(**kwargs)
+        except Exception as exc:
+            _bg_err[0] = exc
+
+    _bg_thread: threading.Thread | None = None
+
+    for band_idx in range(num_bands):
+        y0 = band_idx * band_rows_capacity
         band_rows = min(band_rows_capacity, height - y0)
-        kernels.analyze_band(
-            auxiliary_all,
-            score_all,
-            weighted_auxiliary_all,
-            weighted_rgb_all,
-            working_all,
-            y0,
-            band_rows,
-            height,
-            width,
-            score_floor,
-            decision_threshold,
-            decision_radius,
-            decision_count_limit,
-            floor_enabled_rows,
-            row_reconstruction_gates,
-            fallback_values,
-            record_count,
-            coarse_enabled,
-            coarse_slopes,
-            band_enabled,
-            band_scales,
-            factors_a,
-            factors_b,
-            configured_strengths,
-            band_attempted,
-            band_candidates,
-            band_attempted_counts,
-        )
+        att, cand, cnt, val, wr, adv = _band_buf(band_idx)
+
+        if _bg_thread is not None:
+            _bg_thread.join()
+            if _bg_err[0] is not None:
+                raise _bg_err[0]
+            _bg_thread = None
+
+        if band_idx == 0:
+            kernels.analyze_band(
+                auxiliary_all, score_all, weighted_auxiliary_all,
+                weighted_rgb_all, working_all,
+                y0, band_rows, height, width,
+                score_floor, decision_threshold, decision_radius,
+                decision_count_limit,
+                floor_enabled_rows, row_reconstruction_gates, fallback_values,
+                record_count, coarse_enabled, coarse_slopes,
+                band_enabled, band_scales, factors_a, factors_b,
+                configured_strengths,
+                att, cand, cnt,
+            )
+
+        if band_idx < num_bands - 1:
+            n_y0 = (band_idx + 1) * band_rows_capacity
+            n_rows = min(band_rows_capacity, height - n_y0)
+            n_att, n_cand, n_cnt, _, _, _ = _band_buf(band_idx + 1)
+            _bg_err[0] = None
+            _bg_thread = threading.Thread(
+                target=_analyze_bg,
+                args=(kernels,),
+                kwargs=dict(
+                    auxiliary_all=auxiliary_all,
+                    score_all=score_all,
+                    weighted_auxiliary_all=weighted_auxiliary_all,
+                    weighted_rgb_all=weighted_rgb_all,
+                    working_all=working_all,
+                    y0=n_y0,
+                    band_rows=n_rows,
+                    height=height,
+                    width=width,
+                    score_floor=score_floor,
+                    decision_threshold=decision_threshold,
+                    decision_radius=decision_radius,
+                    decision_count_limit=decision_count_limit,
+                    floor_enabled_rows=floor_enabled_rows,
+                    row_reconstruction_gates=row_reconstruction_gates,
+                    fallback_values=fallback_values,
+                    record_count=record_count,
+                    coarse_enabled=coarse_enabled,
+                    coarse_slopes=coarse_slopes,
+                    band_enabled=band_enabled,
+                    band_scales=band_scales,
+                    factors_a=factors_a,
+                    factors_b=factors_b,
+                    configured_strengths=configured_strengths,
+                    out_attempted=n_att,
+                    out_candidates=n_cand,
+                    out_attempted_counts=n_cnt,
+                ),
+            )
+            _bg_thread.start()
+
         state = kernels.write_band(
-            band_attempted,
-            band_candidates,
-            working_all,
-            y0,
-            band_rows,
-            width,
-            floor_enabled_rows,
-            low64,
-            high64,
-            low_lt_high,
-            dither_scales,
-            state,
-            band_values,
-            band_written,
-            band_advances,
+            att, cand, working_all,
+            y0, band_rows, width,
+            floor_enabled_rows, low64, high64, low_lt_high,
+            dither_scales, state,
+            val, wr, adv,
         )
-        # Per-band emit: the digest consumes the same bytes in the same
-        # row-major order as a per-row accumulation, so it is unchanged.
+
         band_slice = slice(y0, y0 + band_rows)
         noop_band = emit_public_rgb16(working_all[band_slice, :, :3], factors=factors)
-        rendered_band = emit_public_rgb16(band_values[:band_rows], factors=factors)
+        rendered_band = emit_public_rgb16(val[:band_rows], factors=factors)
         output[band_slice] = rendered_band
         output_hash.update(
             rendered_band.astype("<u2", copy=False).tobytes(order="C")
@@ -511,9 +566,9 @@ def run_streaming_replay_fast(
         )
         for i in range(band_rows):
             y = y0 + i
-            attempted += int(band_attempted_counts[i])
-            written += int(band_written[i])
-            public_advances += int(band_advances[i])
+            attempted += int(cnt[i])
+            written += int(wr[i])
+            public_advances += int(adv[i])
             if diagnostics_row is not None:
                 diagnostics_row(
                     y, score_all[y], score_floor, rendered_band[i], noop_band[i]

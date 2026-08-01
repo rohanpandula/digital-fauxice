@@ -1,6 +1,6 @@
 """Low-level clean-room X3A primitives and generic batch interfaces.
 
-The exact product-reference path lives in :mod:`portable_dice.streaming` and
+The exact product-reference path lives in :mod:`portable_digital_ice.streaming` and
 uses audited profiles plus frame-derived calibration.  This lower-level module
 also keeps test models and caller-injected policies; those generic entry points
 raise ``UnboundBehaviorError`` when a required value or implementation is not
