@@ -44,3 +44,8 @@ testpaths = ["tests"]
 markers = [
     "slow: complete-frame gates; need the private fixtures and minutes to run",
 ]
+
+[tool.ruff.lint]
+# Keep the long-standing Ruff rule surface explicit so a future Ruff release
+# cannot silently expand CI to unrelated opt-in rules.
+select = ["E4", "E7", "E9", "F"]
