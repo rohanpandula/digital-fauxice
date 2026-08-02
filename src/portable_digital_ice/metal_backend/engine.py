@@ -35,7 +35,8 @@ import numpy as np
 import numpy.typing as npt
 
 from ..dither import DitherBounds
-from ..output import InverseResponseFactors, emit_public_rgb16
+from ..fast_cpu.engine import _startup_replay_fast
+from ..output import InverseResponseFactors
 from ..reconstruction import (
     FeatureBandExtremaMode,
     ReconstructionParameters,
@@ -46,7 +47,6 @@ from ..stage_parameters import StageParameterProvider
 from ..streaming import (
     StreamingReplayResult,
     _RowCache,
-    _startup_replay,
 )
 from ..x3a import (
     AuxiliaryParameters,
@@ -331,11 +331,10 @@ def _estimate_memory_bytes(height: int, width: int) -> int:
         + pixels * 4 * 4  # working float32 x4
         + pixels * 4 * 3  # auxiliary + score + weighted auxiliary
         + pixels * 4 * 3  # weighted rgb
-        + pixels * 4 * 3  # working output
         + pixels * 1  # eligibility
         + pixels * 2 * 3  # rgb16 output
     )
-    per_site = 8 + 1 + 24 + 12 + 12 + 1  # index, attempted, cand, orig, values, written
+    per_site = 8 + 1 + 24 + 12 + 1  # index, attempted, candidate, values, written
     return planes + pixels * per_site // 2 + (64 << 20)
 
 
@@ -413,25 +412,58 @@ def run_streaming_replay_metal(
             stage_parameter_provider=stage_parameter_provider,
         )
         active_generator = generator or LCG24.from_nikon_pe_initial_state()
+        mode = feature_band_extrema_mode(
+            resolution_metric=reconstruction_parameters.resolution_metric,
+            cross_neighbor_cutoff=reconstruction_parameters.cross_neighbor_cutoff,
+        )
+        cross_neighbor = mode is FeatureBandExtremaMode.CROSS_NEIGHBOR
         with timer.cpu("host.startup-replay"):
-            startup = _startup_replay(
-                cache,
+            first_row_count = 5 if cross_neighbor else 4
+            first_rows = [cache.get(row) for row in range(first_row_count)]
+            low64 = float(np.float32(dither_bounds.low))
+            high64 = float(np.float32(dither_bounds.high))
+            startup = _startup_replay_fast(
+                fast_kernels,
+                working_all=np.stack([row.working for row in first_rows]),
+                auxiliary_all=np.stack([row.auxiliary for row in first_rows]),
+                score_all=np.stack([row.score for row in first_rows]),
                 width=width,
                 score_parameters=score_parameters,
                 decision_parameters=decision_parameters,
                 reconstruction_parameters=reconstruction_parameters,
-                dither_bounds=dither_bounds,
                 generator=active_generator,
                 stage_parameter_provider=stage_parameter_provider,
+                cross_neighbor=cross_neighbor,
+                coarse_slopes=np.ascontiguousarray(
+                    reconstruction_parameters.coarse_slopes, dtype=np.float32
+                ),
+                band_enabled=np.ascontiguousarray(
+                    reconstruction_parameters.band_enabled, dtype=np.uint8
+                ),
+                band_scales=np.ascontiguousarray(
+                    reconstruction_parameters.band_scales, dtype=np.float32
+                ),
+                factors_a=np.ascontiguousarray(
+                    reconstruction_parameters.factors_a, dtype=np.float32
+                ),
+                factors_b=np.ascontiguousarray(
+                    reconstruction_parameters.factors_b, dtype=np.float32
+                ),
+                configured_strengths=np.ascontiguousarray(
+                    reconstruction_parameters.configured_strengths,
+                    dtype=np.float32,
+                ),
+                dither_scales=np.ascontiguousarray(
+                    reconstruction_parameters.dither_scales, dtype=np.float32
+                ),
+                low64=low64,
+                high64=high64,
+                low_lt_high=low64 < high64,
             )
         _check_cancelled()
         if progress is not None:
             progress(0, height, 0, 0)
 
-        mode = feature_band_extrema_mode(
-            resolution_metric=reconstruction_parameters.resolution_metric,
-            cross_neighbor_cutoff=reconstruction_parameters.cross_neighbor_cutoff,
-        )
         factors = InverseResponseFactors.recovered_16bit()
 
         total = height * width
@@ -548,9 +580,6 @@ def run_streaming_replay_metal(
         buf_candidate, candidate_view = session.alloc(
             np.float64, (max(selected_count, 1) * 3,), zero=True
         )
-        buf_original, _original_view = session.alloc(
-            np.float32, (max(selected_count, 1) * 3,), zero=True
-        )
         with timer.cpu("device.features-combine"):
             if selected_count:
                 session.run(
@@ -605,7 +634,6 @@ def run_streaming_replay_metal(
                                 )[0],
                                 buf_attempted,
                                 buf_candidate,
-                                buf_original,
                                 _i32(
                                     selected_count,
                                     height,
@@ -623,7 +651,7 @@ def run_streaming_replay_metal(
 
         # The writer chain runs on one host CPU core via the compiled fast_cpu
         # path, exactly as the CUDA backend does: the per-selected-site
-        # attempted/candidate arrays feed the same write_band already proven
+        # attempted/candidate arrays feed the same write_selected path already proven
         # byte-exact against this reference.  Unified memory makes the transfer
         # a view, not a copy.
         low64 = float(np.float32(dither_bounds.low))
@@ -667,29 +695,38 @@ def run_streaming_replay_metal(
             )
         _check_cancelled()
 
-        buf_work_output, _work_output_view = session.alloc(
-            np.float32, (height, width, 3)
-        )
         buf_out, out_view = session.alloc(np.uint16, (height, width, 3))
         buf_factor_high, _ = session.upload(factors.high)
         buf_factor_low, _ = session.upload(factors.low)
         buf_counters, counters_view = session.alloc(np.uint32, (3,), zero=True)
         with timer.cpu("device.assemble-emit"):
-            launches = [
-                (
-                    get_pipeline("k_copy_visible"),
-                    [buf_working, buf_work_output, _i32(total)],
-                    (total,),
-                )
-            ]
+            launches = []
             if selected_count:
                 launches.append(
                     (
-                        get_pipeline("k_scatter_values"),
+                        get_pipeline("k_site_counters"),
+                        [
+                            buf_attempted,
+                            buf_values,
+                            buf_selected,
+                            buf_written,
+                            buf_factor_high,
+                            buf_factor_low,
+                            buf_counters,
+                            _i32(selected_count),
+                            buf_working,
+                            buf_eligible,
+                        ],
+                        (selected_count,),
+                    )
+                )
+                launches.append(
+                    (
+                        get_pipeline("k_scatter_values_inplace"),
                         [
                             buf_selected,
                             buf_values,
-                            buf_work_output,
+                            buf_working,
                             buf_error_flags,
                             _i32(selected_count),
                         ],
@@ -698,34 +735,17 @@ def run_streaming_replay_metal(
                 )
             launches.append(
                 (
-                    get_pipeline("k_emit_rgb16"),
+                    get_pipeline("k_emit_working_rgb16"),
                     [
-                        buf_work_output,
+                        buf_working,
                         buf_factor_high,
                         buf_factor_low,
                         buf_out,
-                        _i32(total * 3),
+                        _i32(total),
                     ],
-                    (total * 3,),
+                    (total, 3),
                 )
             )
-            if selected_count:
-                launches.append(
-                    (
-                        get_pipeline("k_site_counters"),
-                        [
-                            buf_attempted,
-                            buf_values,
-                            buf_original,
-                            buf_written,
-                            buf_factor_high,
-                            buf_factor_low,
-                            buf_counters,
-                            _i32(selected_count),
-                        ],
-                        (selected_count,),
-                    )
-                )
             session.run(launches)
         _check_cancelled()
 
@@ -748,24 +768,10 @@ def run_streaming_replay_metal(
                     np.float32(score_parameters.floor),
                     out=_diagnostic_at_floor_mask,
                 )
-                bytes_per_working_row = width * 4 * np.dtype(np.float32).itemsize
-                rows_per_chunk = max(
-                    1,
-                    min(height, (8 << 20) // bytes_per_working_row),
+                _diagnostic_changed_mask[...] = eligible_view.reshape(
+                    height, width
                 )
-                for row_start in range(0, height, rows_per_chunk):
-                    row_stop = min(height, row_start + rows_per_chunk)
-                    working_chunk = np.array(working_view[row_start:row_stop])
-                    noop_chunk = emit_public_rgb16(
-                        working_chunk[:, :, :3],
-                        factors=factors,
-                    )
-                    np.any(
-                        host_out[row_start:row_stop] != noop_chunk,
-                        axis=2,
-                        out=_diagnostic_changed_mask[row_start:row_stop],
-                    )
-                    _check_cancelled()
+                _check_cancelled()
 
         output[:] = host_out
         with timer.cpu("host.sha256"):

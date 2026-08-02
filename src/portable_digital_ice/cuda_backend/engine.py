@@ -426,7 +426,7 @@ def run_streaming_replay_cuda(
     # The writer chain runs on one host CPU core via the compiled fast_cpu
     # path (docs/cuda-decision-record.md's ranked next optimization): the
     # GPU pipeline's per-selected-site attempted/candidate arrays cross the
-    # PCIe bus as raw bytes and feed the same write_band that validates
+    # PCIe bus as raw bytes and feed the same write_selected path that validates
     # byte-exact against this reference on the cpu-fast backend.  See
     # .host_writer for the layout mapping and its ordering argument.
     low64 = float(np.float32(dither_bounds.low))

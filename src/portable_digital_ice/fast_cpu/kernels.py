@@ -1202,3 +1202,59 @@ def write_band(
         out_written[i] = written
         out_advances[i] = advances_total
     return state
+
+
+@njit(cache=True, nogil=True)
+def write_selected(
+    selected,
+    attempted,
+    candidates,
+    working_all,
+    width,
+    floor_enabled_rows,
+    low64,
+    high64,
+    low_lt_high,
+    dither_scales,
+    state,
+    out_values,
+    out_written,
+):
+    """Run the serial writer directly over sorted selected pixel indices."""
+
+    original_rgb = np.empty(3, dtype=np.float32)
+    total_advances = np.int64(0)
+    for i in range(selected.shape[0]):
+        pixel = selected[i]
+        y = pixel // width
+        x = pixel - y * width
+        original_rgb[0] = working_all[y, x, 0]
+        original_rgb[1] = working_all[y, x, 1]
+        original_rgb[2] = working_all[y, x, 2]
+        out_values[i, 0] = original_rgb[0]
+        out_values[i, 1] = original_rgb[1]
+        out_values[i, 2] = original_rgb[2]
+        out_written[i] = 0
+        if attempted[i] == 0:
+            continue
+        values, advances, state = write_pixel_scalar(
+            candidates[i],
+            original_rgb,
+            floor_enabled_rows[y] != 0,
+            low64,
+            high64,
+            low_lt_high,
+            dither_scales,
+            state,
+        )
+        out_values[i, 0] = values[0]
+        out_values[i, 1] = values[1]
+        out_values[i, 2] = values[2]
+        if (
+            values[0] != original_rgb[0]
+            or values[1] != original_rgb[1]
+            or values[2] != original_rgb[2]
+        ):
+            out_written[i] = 1
+        total_advances += advances
+    return total_advances, state
