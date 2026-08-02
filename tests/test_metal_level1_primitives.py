@@ -73,15 +73,110 @@ kernel void t_rgb_unscaled_averages(
   long count = (long)iparams[0];
   long i = (long)idx;
   if (i >= count) return;
-  float p[9][9][3];
+  float p[3][9][9];
   for (int y = 0; y < 9; ++y)
     for (int x = 0; x < 9; ++x)
       for (int c = 0; c < 3; ++c)
-        p[y][x][c] = patches[(((i * 9) + y) * 9 + x) * 3 + c];
+        p[c][y][x] = patches[(((i * 9) + y) * 9 + x) * 3 + c];
   u64 q[3][3];
   rgb_unscaled_averages(p, q);
   for (int s = 0; s < 3; ++s)
     for (int c = 0; c < 3; ++c) out[(i * 3 + s) * 3 + c] = q[s][c];
+}
+
+kernel void t_rgb_history_averages(
+    device const float* wrgb [[buffer(0)]],
+    device const float* working [[buffer(1)]],
+    device const int* centers [[buffer(2)]],
+    device u64* patch_out [[buffer(3)]],
+    device u64* direct_out [[buffer(4)]],
+    constant float* fparams [[buffer(5)]],
+    constant int* iparams [[buffer(6)]],
+    uint idx [[thread_position_in_grid]]) {
+  long count = (long)iparams[0];
+  long i = (long)idx;
+  if (i >= count) return;
+  int H = iparams[1];
+  int W = iparams[2];
+  int cy = centers[i * 2 + 0];
+  int cx = centers[i * 2 + 1];
+  float score_floor = fparams[0];
+  float p[3][9][9];
+  for (int dy = -4; dy <= 4; ++dy) {
+    int ady = dy < 0 ? -dy : dy;
+    int x_radius = ady == 4 ? 2 : (ady == 3 ? 3 : 4);
+    for (int dx = -x_radius; dx <= x_radius; ++dx)
+      for (int c = 0; c < 3; ++c)
+        p[c][dy + 4][dx + 4] = load_wrgb_hist(
+            wrgb, working, H, W, score_floor, cy + dy, cx + dx, c);
+  }
+  u64 patch_q[3][3], direct_q[3][3];
+  rgb_unscaled_averages(p, patch_q);
+  rgb_unscaled_averages_at(wrgb, working, H, W, score_floor, cy, cx,
+                           direct_q);
+  for (int s = 0; s < 3; ++s) {
+    for (int c = 0; c < 3; ++c) {
+      long out_index = (i * 3 + s) * 3 + c;
+      patch_out[out_index] = patch_q[s][c];
+      direct_out[out_index] = direct_q[s][c];
+    }
+  }
+}
+
+kernel void t_feature_range_reducers(
+    device const float* records [[buffer(0)]],
+    device const u8* record_counts [[buffer(1)]],
+    device u64* materialized_out [[buffer(2)]],
+    device u64* streamed_out [[buffer(3)]],
+    constant int* iparams [[buffer(4)]],
+    uint idx [[thread_position_in_grid]]) {
+  long count = (long)iparams[0];
+  long i = (long)idx;
+  if (i >= count) return;
+  int record_count = (int)record_counts[i];
+  float features[5][4];
+  for (int r = 0; r < 5; ++r)
+    for (int lane = 0; lane < 4; ++lane)
+      features[r][lane] = records[(i * 5 + r) * 4 + lane];
+
+  u64 old_min[3], old_max[3];
+  for (int t = 0; t < 3; ++t) {
+    u64 mn = f64_sub(f64_from_f32(features[0][t + 1]),
+                     f64_from_f32(features[0][t]));
+    u64 mx = mn;
+    for (int r = 1; r < record_count; ++r) {
+      u64 d = f64_sub(f64_from_f32(features[r][t + 1]),
+                      f64_from_f32(features[r][t]));
+      mn = f64_lt(d, mn) ? d : mn;
+      mx = f64_lt(mx, d) ? d : mx;
+    }
+    old_min[t] = f64_from_f32(f32_from_f64(mn));
+    old_max[t] = f64_from_f32(f32_from_f64(mx));
+  }
+
+  u64 new_min[3], new_max[3];
+  for (int t = 0; t < 3; ++t) {
+    u64 d = f64_sub(f64_from_f32(features[0][t + 1]),
+                    f64_from_f32(features[0][t]));
+    new_min[t] = d;
+    new_max[t] = d;
+  }
+  for (int r = 1; r < record_count; ++r) {
+    for (int t = 0; t < 3; ++t) {
+      u64 d = f64_sub(f64_from_f32(features[r][t + 1]),
+                      f64_from_f32(features[r][t]));
+      new_min[t] = f64_lt(d, new_min[t]) ? d : new_min[t];
+      new_max[t] = f64_lt(new_max[t], d) ? d : new_max[t];
+    }
+  }
+  for (int t = 0; t < 3; ++t) {
+    new_min[t] = f64_from_f32(f32_from_f64(new_min[t]));
+    new_max[t] = f64_from_f32(f32_from_f64(new_max[t]));
+    materialized_out[i * 6 + t] = old_min[t];
+    materialized_out[i * 6 + 3 + t] = old_max[t];
+    streamed_out[i * 6 + t] = new_min[t];
+    streamed_out[i * 6 + 3 + t] = new_max[t];
+  }
 }
 
 kernel void t_dither_chain(
@@ -295,6 +390,117 @@ def test_rgb_candidate_averages_bits(harness: MetalHarness):
     )
     got = harness.read(out, np.uint64, count * 9).reshape(count, 3, 3)
     assert np.array_equal(got, expected.view(np.uint64))
+
+
+@pytest.mark.parametrize("score_floor", [0.0, 0.02, 1.0])
+def test_rgb_direct_history_matches_patch_bits(
+    harness: MetalHarness, score_floor: float
+):
+    rng = np.random.default_rng(4000 + int(score_floor * 100))
+    height, width = 11, 13
+    wrgb = rng.uniform(-100.0, 66000.0, size=(height, width, 3)).astype(
+        np.float32
+    )
+    working = rng.uniform(-100.0, 66000.0, size=(height, width, 4)).astype(
+        np.float32
+    )
+    special_values = np.asarray(
+        [
+            0x00000000,
+            0x80000000,
+            0x00000001,
+            0x007FFFFF,
+            0x00800000,
+            0x7F7FFFFF,
+            0xFF7FFFFF,
+            0x7F800000,
+            0xFF800000,
+            0x7FC00000,
+            0xFFC00001,
+        ],
+        dtype=np.uint32,
+    ).view(np.float32)
+    for index, value in enumerate(special_values):
+        y = index % height
+        x = (index * 5) % width
+        c = index % 3
+        wrgb[y, x, c] = value
+        working[y, x, c] = value
+    centers = np.asarray(
+        [
+            (y, x)
+            for y in (0, 1, height // 2, height - 2, height - 1)
+            for x in (0, 1, width // 2, width - 2, width - 1)
+        ],
+        dtype=np.int32,
+    )
+    count = centers.shape[0]
+    patch_out = harness.buffer_out(np.uint64, count * 9)
+    direct_out = harness.buffer_out(np.uint64, count * 9)
+    harness.run(
+        "t_rgb_history_averages",
+        [
+            harness.buffer_from(wrgb),
+            harness.buffer_from(working),
+            harness.buffer_from(centers),
+            patch_out,
+            direct_out,
+            harness.buffer_from(np.asarray([score_floor], dtype=np.float32)),
+            _i32(harness, count, height, width),
+        ],
+        count,
+    )
+    patch_bits = harness.read(patch_out, np.uint64, count * 9)
+    direct_bits = harness.read(direct_out, np.uint64, count * 9)
+    np.testing.assert_array_equal(direct_bits, patch_bits)
+
+
+def test_streamed_feature_extrema_match_materialized_bits(
+    harness: MetalHarness,
+) -> None:
+    rng = np.random.default_rng(0xE871)
+    count = 4096
+    records = rng.standard_normal((count, 5, 4), dtype=np.float32)
+    adversarial_bits = np.asarray(
+        [
+            0x00000000,
+            0x80000000,
+            0x00000001,
+            0x007FFFFF,
+            0x00800000,
+            0x3F800000,
+            0xBF800000,
+            0x7F7FFFFF,
+            0xFF7FFFFF,
+            0x7F800000,
+            0xFF800000,
+            0x7FC00000,
+            0xFFC00001,
+        ],
+        dtype=np.uint32,
+    ).view(np.float32)
+    records[: adversarial_bits.size] = adversarial_bits[:, None, None]
+    for i, value in enumerate(adversarial_bits):
+        records[i, i % 5, i % 4] = value
+        records[i, (i + 1) % 5, (i + 1) % 4] = np.float32(-value)
+    record_counts = np.where(np.arange(count) % 2 == 0, 1, 5).astype(np.uint8)
+    materialized = harness.buffer_out(np.uint64, count * 6)
+    streamed = harness.buffer_out(np.uint64, count * 6)
+    harness.run(
+        "t_feature_range_reducers",
+        [
+            harness.buffer_from(records),
+            harness.buffer_from(record_counts),
+            materialized,
+            streamed,
+            _i32(harness, count),
+        ],
+        count,
+    )
+    np.testing.assert_array_equal(
+        harness.read(streamed, np.uint64, count * 6),
+        harness.read(materialized, np.uint64, count * 6),
+    )
 
 
 def test_conditional_dither_chain_bits(harness: MetalHarness):

@@ -18,7 +18,7 @@ from portable_digital_ice import (
     ScannerModel,
     process,
 )
-from portable_digital_ice.cuda_backend.engine import CudaBackendUnavailable
+from portable_digital_ice.metal_backend.engine import MetalBackendUnavailable
 
 from fauxce_hybrid import cli
 from fauxce_hybrid.cache import canonical_json_bytes, hash_rgb16, hash_rgbir16
@@ -1063,15 +1063,14 @@ def test_budget_and_context_fail_before_model_invocation(
     assert not context_output.exists()
 
 
-def test_auto_full_run_cuda_unavailable_reruns_cpu_and_records_reason(
+def test_metal_request_fails_clearly(
     acquisition: tuple[np.ndarray, np.ndarray, Path, Path],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _, _, prepass_path, main_path = acquisition
-    output = tmp_path / "auto-fallback"
-    calls: list[ComputeBackend] = []
-    direct_process = process
+    output = tmp_path / "metal-unavailable"
 
     def simulated_process(
         job: ProcessingJob,
@@ -1079,37 +1078,22 @@ def test_auto_full_run_cuda_unavailable_reruns_cpu_and_records_reason(
         backend: ComputeBackend | str,
         export_diagnostics: bool,
     ):
-        selected = ComputeBackend(backend)
-        calls.append(selected)
-        if selected is ComputeBackend.AUTO:
-            raise CudaBackendUnavailable("simulated full-frame allocation failure")
-        return direct_process(
-            job,
-            backend=selected,
-            export_diagnostics=export_diagnostics,
-        )
+        assert ComputeBackend(backend) is ComputeBackend.METAL
+        raise MetalBackendUnavailable("simulated: no Metal device is visible")
 
     monkeypatch.setattr(cli, "process_digital_ice", simulated_process)
-    assert (
+    with pytest.raises(SystemExit) as raised:
         cli.main(
             _arguments(
                 prepass=prepass_path,
                 main=main_path,
                 output=output,
-                backend="auto",
+                backend="metal",
             )
         )
-        == 0
-    )
-
-    assert calls == [ComputeBackend.AUTO, ComputeBackend.CPU]
-    metadata = json.loads((output / "run-metadata.json").read_bytes())
-    assert metadata["backend"]["requested"] == "auto"
-    assert metadata["backend"]["used"] == "cpu"
-    assert metadata["backend"]["reason"] == (
-        "CUDA unavailable; complete job ran on exact CPU reference"
-    )
-    assert "simulated full-frame allocation failure" not in json.dumps(metadata)
+    assert raised.value.code == 2
+    assert "no Metal device is visible" in capsys.readouterr().err
+    assert not output.exists()
 
 
 def test_manifest_claims_are_hashed_and_must_match_inputs(

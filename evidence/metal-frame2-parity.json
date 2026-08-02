@@ -1,25 +1,92 @@
 {
-  "schema": "portable-digital-ice-metal-parity-receipt-v1",
-  "status": "PASS",
-  "claim": "Metal backend byte parity with the CPU reference of this package, complete native 4000 frame (validation frame2), established in-process against the compiled cpu-fast backend and bound to the pinned CPU-reference output of the checked-in receipts",
-  "parity_baseline": "compared bitwise in-process against ComputeBackend.CPU_FAST (output bytes, all counters, RNG accounting, startup receipt, and the three diagnostics planes); the output hash equals the CPU-reference hash pinned by the cuda and cpu-fast receipts for this fixture, and output plus all three diagnostics planes equal the archived full-frame export of the completed CUDA gate bitwise, so the chain to the CPU reference is hash-transitive on identical input bytes",
+  "absolute_delta_sum": 0,
+  "attempted_pixels": 7275194,
+  "case": "frame2",
+  "changed_pixels": 6718151,
+  "claim": "metal backend byte parity with the CPU reference of this package, complete native 4000 frame (validation frame2), established in-process against the cpu-fast backend and bound to the pinned CPU-reference output of the checked-in receipts",
+  "compared_rgb16_samples": 68447316,
+  "cpu_fast_and_metal_output_sha256": "f2e9b84ddc6bc49e2e34b9dd86cac992ba12add6e0f4a14720e2fde74719958a",
+  "determinism": {
+    "consecutive_runs_identical": true,
+    "runs": 2
+  },
+  "diagnostics_planes_equal": true,
+  "final_rng_state": 16418997,
+  "gate_checks": {
+    "absolute_delta_sum_zero": true,
+    "attempted_pixels_equal": true,
+    "baseline_matches_pinned_cpu_reference_output": true,
+    "candidate_matches_pinned_cpu_reference_output": true,
+    "changed_pixels_equal": true,
+    "consecutive_runs_identical": true,
+    "diagnostics_planes_equal": true,
+    "final_rng_state_equal": true,
+    "fixtures_immutable_across_run": true,
+    "geometry_matches_expected": true,
+    "main_fixture_sha256_matches_pin": true,
+    "main_rgbi16_raw_byte_sha256_matches_pin": true,
+    "main_selector_matches_profile": true,
+    "maximum_absolute_delta_zero": true,
+    "mismatch_pixels_zero": true,
+    "mismatch_samples_zero": true,
+    "output_hash_equal": true,
+    "package_parity_comparator_clean": true,
+    "prepass_fixture_sha256_matches_pin": true,
+    "prepass_is_hash_bound_to_main": true,
+    "prepass_rgbi16_raw_byte_sha256_matches_pin": true,
+    "prepass_selector_matches_main": true,
+    "public_rng_advances_equal": true,
+    "sample_count_matches_expected": true,
+    "shape_matches": true,
+    "source_manifest_stable_across_run": true,
+    "startup_rng_advances_equal": true,
+    "written_pixels_equal": true
+  },
+  "gate_checks_passed": 28,
+  "gate_checks_total": 28,
   "geometry_hwc": [
     5782,
     3946,
     3
   ],
-  "compared_rgb16_samples": 68447316,
-  "mismatch_samples": 0,
-  "mismatch_pixels": 0,
+  "main_fixture_sha256": "6e2600e14d53e258d1df8e4d4ba8e75cb830f044bb199b0870c95a77f7904911",
+  "main_rgbi16_raw_byte_sha256": "bb608b6a3037ec8d3ba7867e9c6b072607ba694f3f8e41bf75f7f8dcfdf6e740",
   "maximum_absolute_delta": 0,
-  "absolute_delta_sum": 0,
-  "diagnostics_planes_equal": true,
-  "cpu_fast_and_metal_output_sha256": "f2e9b84ddc6bc49e2e34b9dd86cac992ba12add6e0f4a14720e2fde74719958a",
-  "attempted_pixels": 7275194,
-  "written_pixels": 6720504,
-  "changed_pixels": 6718151,
+  "minted_by": {
+    "baseline_backend": "cpu-fast",
+    "baseline_selection_reason": "explicit cpu-fast request; self-test passed byte parity (numba 0.66.0)",
+    "candidate_selection_reason": "explicit Metal request; self-test passed",
+    "files": {
+      "tools/dice_fixture_format.py": "6b00e440e33600cc794f5814e4c7bf56392110d3ed814082055537bb30d028a9",
+      "tools/mint_parity_receipt.py": "fb4d65c604c3be602aa2d72b0a39b42b50fb49e01770a85be173b2e109ad90e4"
+    },
+    "package_under_test": {
+      "sha256": "95640f42b4f7add9d29fc1b1c59b8d32a63c4dcaca1bf8c098e49d72e7347eaa",
+      "source": "src/portable_digital_ice/__init__.py"
+    },
+    "tool": "tools/mint_parity_receipt.py"
+  },
+  "mismatch_pixels": 0,
+  "mismatch_samples": 0,
+  "parity_baseline": "compared bitwise in-process against ComputeBackend.CPU_FAST (output bytes, all counters, RNG accounting, startup receipt, and the three diagnostics planes) using the package's own _parity_failures comparator; the output hash equals the CPU-reference hash pinned for this fixture, so the chain to the CPU reference is hash-transitive on identical input bytes",
+  "prepass_fixture_sha256": "d7333bf59340e5bb679f88a2064cd1fb8c203e80535b6fcf91b4e3eb9796e49e",
+  "prepass_rgbi16_raw_byte_sha256": "4a99fe2f2b5965aced86beec1c7e38ff731945458452d895cfa3581c29da7636",
   "public_rng_advances": 36383248,
-  "final_rng_state": 16418997,
+  "runtime": {
+    "cpu_fast_elapsed_seconds": 13.918,
+    "machine": "arm64",
+    "metal_elapsed_seconds_per_run": [
+      4.418,
+      2.355
+    ],
+    "numpy": "2.4.6",
+    "os": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "python": "3.13.5"
+  },
+  "schema": "portable-digital-ice-metal-parity-receipt-v1",
+  "source_manifest_file_count": 31,
+  "source_manifest_scope": "src/portable_digital_ice/**/*.py",
+  "source_manifest_sha256": "74ccc91b57915c636dccb8da7316978833a649c04f9a23d8fbe38168fbcea35b",
   "startup_rng_advances_per_stage": [
     0,
     0,
@@ -28,36 +95,6 @@
     0,
     0
   ],
-  "main_fixture_sha256": "6e2600e14d53e258d1df8e4d4ba8e75cb830f044bb199b0870c95a77f7904911",
-  "prepass_fixture_sha256": "d7333bf59340e5bb679f88a2064cd1fb8c203e80535b6fcf91b4e3eb9796e49e",
-  "main_rgbi16_raw_byte_sha256": "bb608b6a3037ec8d3ba7867e9c6b072607ba694f3f8e41bf75f7f8dcfdf6e740",
-  "prepass_rgbi16_raw_byte_sha256": "4a99fe2f2b5965aced86beec1c7e38ff731945458452d895cfa3581c29da7636",
-  "gate_checks_passed": 26,
-  "gate_checks_total": 26,
-  "determinism": {
-    "consecutive_runs_identical": true
-  },
-  "source_manifest_sha256": "aaac922e2c41fe683ee24a7161c06fa26c430f58e67da672ddb547a85941fa43",
-  "source_manifest_file_count": 32,
-  "metal_runtime": {
-    "gpu": "Apple M4",
-    "machine": "arm64",
-    "os": "macOS 26.5.2",
-    "python": "3.13.5",
-    "numpy": "2.4.6",
-    "numba": "0.66.0",
-    "pyobjc": "12.2.1",
-    "compile_options": "fastMathEnabled=False, mathMode=safe",
-    "binary64_execution": "software IEEE-754 (integer arithmetic)",
-    "elapsed_seconds_per_run": [
-      8.291,
-      8.304
-    ],
-    "writer_chain_location": "host CPU, one core, via the compiled fast_cpu.kernels.write_band path (cuda_backend/host_writer.py), the same host writer the CUDA backend uses",
-    "load_note": "1-minute load average 22.5 on this 10-core machine during the gate; byte equality is load-independent, wall time is not"
-  },
-  "cpu_fast_runtime": {
-    "elapsed_seconds": 17.798
-  },
-  "stage_timings_note": "see docs/metal-backend.md for the stage table"
+  "status": "PASS",
+  "written_pixels": 6720504
 }

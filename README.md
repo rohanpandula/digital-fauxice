@@ -69,13 +69,16 @@ profile with no retuning, so the match is not the product of tuning until one
 image happens to agree.
 
 The pure Python and NumPy reference takes roughly an hour per frame. It is
-deliberately a conservative research implementation. The optional CUDA backend
-produces byte-identical output in about 5.5 to 6.5 seconds on an NVIDIA RTX
-A4000 (the sequential writer chain runs on one host CPU core through the same
-compiled path as the CPU backend below), an optional compiled CPU backend
-does the same in about ten seconds on an Apple M4, an optional Metal backend
-does the same in about nine seconds on that M4's GPU, and all of them fail
-closed rather than run in any configuration they cannot verify.
+deliberately a conservative research implementation. The receipt-bound CUDA
+predecessor produced byte-identical output in about 5.5 to 6.5 seconds on an
+NVIDIA RTX A4000. The current compact host-writer revision still passes its
+synthetic parity suite, but its complete-frame CUDA receipts must be re-minted
+on an NVIDIA validation lane before those receipts bind this tree. An optional
+compiled CPU backend processes the same frames in about ten seconds on an
+Apple M4, while the optimized Metal backend takes about 2.3 seconds in
+controlled warm replay and remained under 3.0 seconds in the refreshed receipt
+gates on that M4. Every backend fails closed when its local
+availability and startup checks cannot run.
 
 ## Optional AI repair for the worst damage
 
@@ -323,11 +326,14 @@ validated by binding receipts on both complete native 4000 dpi frames:
 identical RGB16 output to this package's CPU reference, compared sample by
 sample (68,447,316 values per frame, zero mismatches), with identical
 changed-pixel accounting, RNG advance counts, final RNG states, startup
-receipts, and the full synthetic adversarial suite. Both receipts bind the
-same fresh source manifest of this tree. `cuda` fails closed with a specific
-reason when unusable; `auto` selects CUDA only after a startup self-test
-passes byte parity. See [`docs/cuda-backend.md`](docs/cuda-backend.md) and
-the receipts under [`evidence/`](evidence/).
+receipts, and the full synthetic adversarial suite. Those receipts bind the
+validated `write_band` predecessor. This tree now uses the compact
+`write_selected` host adapter; its complete-frame CUDA re-mint remains pending
+on an NVIDIA validation lane and is not represented as a current-tree receipt.
+`cuda` fails closed with a specific reason when unusable, and `auto` selects it
+only after a startup self-test passes byte parity. See
+[`docs/cuda-backend.md`](docs/cuda-backend.md) and the receipts under
+[`evidence/`](evidence/).
 
 An optional compiled CPU backend (`cpu-fast`, optional extra
 `pip install 'portable-digital-ice[fast]'`) holds the same receipt-backed
@@ -345,8 +351,9 @@ reference. See [`docs/cpu-fast-backend.md`](docs/cpu-fast-backend.md).
 An optional Metal backend for Apple Silicon (`metal`, optional extra
 `pip install 'portable-digital-ice[metal]'`) holds the same receipt-backed
 claim on both complete validation frames: byte-identical output, counters,
-RNG accounting, and diagnostics planes, 26 binding checks per frame, in
-about nine seconds per frame on an Apple M4. Apple GPUs have no
+RNG accounting, and diagnostics planes, 28 named gate checks per frame, with
+controlled warm replay around 2.3 seconds and refreshed receipt-gate runs under
+3.0 seconds on an Apple M4. Apple GPUs have no
 double-precision hardware, so the kernels execute every binary64 operation
 through a software IEEE-754 implementation in integer arithmetic, which no
 compiler mode can contract, reassociate, or flush; the full-frame receipts

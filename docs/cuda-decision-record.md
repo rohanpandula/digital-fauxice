@@ -102,6 +102,15 @@ removed); peak host RSS rose (1.37 GB -> about 2.75 GB) because the host
 writer now materializes the full working plane and per-site candidate
 arrays once per frame. Ranked optimization 2 (startup replay) remains open.
 
+## Update 2026-08-01: compact selected-site host writer
+
+The shared host adapter now calls `fast_cpu.kernels.write_selected`, preserving
+the same row-major draw order without allocating dense attempted, candidate,
+and output arrays. The compact adapter passes direct differential coverage and
+both current Metal complete-frame gates. A current-tree CUDA full-frame re-mint
+is still required on the NVIDIA validation lane; the 2026-07-17 receipts and
+timings above describe the preceding dense `write_band` implementation.
+
 ## Independent translation review
 
 An adversarial equation-by-equation review of the kernel translation against

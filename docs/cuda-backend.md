@@ -8,9 +8,13 @@ changed-pixel accounting, the number of public RNG advances, and the final RNG s
 compared sample by sample against this package's CPU reference on both
 complete validation frames, plus a 300-row crop receipt with
 cross-architecture agreement. The receipts are checked in under
-[`evidence/`](../evidence/). The two complete-frame CUDA receipts bind this
-tree's current source manifest; `DERIVATION.md` records the ancestry and scope
-of the older public CPU and crop receipts.
+[`evidence/`](../evidence/). The two complete-frame CUDA receipts bind the
+validated `write_band` predecessor. The current tree's compact
+`write_selected` host adapter has passed direct differential and Metal
+complete-frame gates, but its CUDA complete-frame receipts still require an
+NVIDIA validation lane and therefore do not yet bind this source manifest.
+`DERIVATION.md` records the ancestry and scope of the older public CPU and crop
+receipts.
 
 ## Install
 
@@ -107,6 +111,16 @@ Progress callbacks fire at coarser boundaries than the CPU path (per stage
 rather than per row) with exact totals at completion; cancellation is honored
 between stages and can never corrupt partial output because the output buffer
 is written only once, after all device work completes.
+
+## Current compact-writer status
+
+On 2026-08-01 the shared host adapter moved from dense `write_band` buffers to
+the compact, strictly ordered `write_selected` path. Direct differential tests
+cover empty, sparse, all-site, nonfinite, and RNG-sensitive inputs, and the
+current Metal complete-frame receipts exercise the same adapter with 28/28
+checks on both frames. The CUDA full-frame gate has not yet been rerun on the
+NVIDIA lane, so the historical CUDA timing and receipt claims above remain
+scoped to the preceding `write_band` tree.
 
 ## Files
 

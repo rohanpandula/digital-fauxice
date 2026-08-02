@@ -507,27 +507,30 @@ inline float load_wrgb_hist(device const float* wrgb,
 // The accumulation order and float32 store boundaries are load-bearing.
 // ===========================================================================
 
-inline void unscaled_averages_scalar(thread const float (*p)[9],
+// Q69/Q21 helper shared by the scalar and RGB paths.  Each column carries
+// the exact vertical accumulation only as far as a retained horizontal term
+// needs it; skipped float32 stores and suffix additions have no consumers.
+inline void unscaled_averages_q69q21(thread const float (*p)[9],
                                      thread u64* q) {
-  float s3[9], s5[9], s7[9], s9[9], b16[9];
+  float s3[9], s5[9], s7[9], s9[9];
   for (int x = 0; x < 9; ++x) {
     u64 acc = f64_add(f64_from_f32(p[3][x]), f64_from_f32(p[4][x]));
     acc = f64_add(acc, f64_from_f32(p[5][x]));
-    s3[x] = f32_from_f64(acc);
+    if (x == 2 || x == 6) s3[x] = f32_from_f64(acc);
     acc = f64_add(acc, f64_from_f32(p[2][x]));
     acc = f64_add(acc, f64_from_f32(p[6][x]));
-    s5[x] = f32_from_f64(acc);
-    acc = f64_add(acc, f64_from_f32(p[1][x]));
-    acc = f64_add(acc, f64_from_f32(p[7][x]));
-    s7[x] = f32_from_f64(acc);
-    acc = f64_add(acc, f64_from_f32(p[0][x]));
-    acc = f64_add(acc, f64_from_f32(p[8][x]));
-    s9[x] = f32_from_f64(acc);
-    u64 center = f64_from_f32(p[4][x]);
-    u64 bacc = f64_add(f64_from_f32(p[3][x]), center);
-    bacc = f64_add(bacc, f64_from_f32(p[5][x]));
-    bacc = f64_add(bacc, center);
-    b16[x] = f32_from_f64(f64_mul(bacc, F64C_COEFF16));
+    if (x == 0 || (x >= 3 && x <= 5) || x == 8)
+      s5[x] = f32_from_f64(acc);
+    if (x >= 1 && x <= 7) {
+      acc = f64_add(acc, f64_from_f32(p[1][x]));
+      acc = f64_add(acc, f64_from_f32(p[7][x]));
+      if (x == 1 || x == 7) s7[x] = f32_from_f64(acc);
+    }
+    if (x >= 2 && x <= 6) {
+      acc = f64_add(acc, f64_from_f32(p[0][x]));
+      acc = f64_add(acc, f64_from_f32(p[8][x]));
+      s9[x] = f32_from_f64(acc);
+    }
   }
   u64 t21 = f64_add(f64_from_f32(s3[6]), f64_from_f32(s3[2]));
   t21 = f64_add(t21, f64_from_f32(s5[3]));
@@ -537,31 +540,41 @@ inline void unscaled_averages_scalar(thread const float (*p)[9],
   t69 = f64_add(t69, f64_from_f32(s7[1]));
   t69 = f64_add(t69, f64_from_f32(s7[7]));
   for (int x = 2; x < 7; ++x) t69 = f64_add(t69, f64_from_f32(s9[x]));
-  u64 t16 = f64_add(f64_from_f32(b16[4]), f64_from_f32(b16[3]));
-  t16 = f64_add(t16, f64_from_f32(b16[5]));
-  t16 = f64_add(t16, f64_from_f32(b16[4]));
   q[0] = f64_mul(t69, F64C_COEFF69);
   q[1] = f64_mul(t21, F64C_COEFF21);
+}
+
+inline void unscaled_averages_scalar(thread const float (*p)[9],
+                                     thread u64* q) {
+  unscaled_averages_q69q21(p, q);
+  float b16[3];
+  for (int x = 3; x <= 5; ++x) {
+    u64 center = f64_from_f32(p[4][x]);
+    u64 bacc = f64_add(f64_from_f32(p[3][x]), center);
+    bacc = f64_add(bacc, f64_from_f32(p[5][x]));
+    bacc = f64_add(bacc, center);
+    b16[x - 3] = f32_from_f64(f64_mul(bacc, F64C_COEFF16));
+  }
+  u64 t16 = f64_add(f64_from_f32(b16[1]), f64_from_f32(b16[0]));
+  t16 = f64_add(t16, f64_from_f32(b16[2]));
+  t16 = f64_add(t16, f64_from_f32(b16[1]));
   q[2] = t16;
 }
 
 // reconstruction._recovered_rgb_unscaled_averages: shares Q69/Q21 with the
 // scalar helper, but the 3x3 binomial path keeps binary64 precision until
 // one final multiply (no intermediate float32 store).
-inline void rgb_unscaled_averages(thread const float (*p)[9][3],
+inline void rgb_unscaled_averages(thread const float (*p)[9][9],
                                   thread u64 (*q)[3]) {
   for (int c = 0; c < 3; ++c) {
-    float lane[9][9];
-    for (int y = 0; y < 9; ++y)
-      for (int x = 0; x < 9; ++x) lane[y][x] = p[y][x][c];
     u64 ql[3];
-    unscaled_averages_scalar(lane, ql);
+    unscaled_averages_q69q21(p[c], ql);
     u64 rows[3];
     for (int r = 0; r < 3; ++r) {
       int y = 3 + r;
-      u64 center = f64_from_f32(lane[y][4]);
-      u64 horizontal = f64_add(f64_from_f32(lane[y][3]),
-                               f64_from_f32(lane[y][5]));
+      u64 center = f64_from_f32(p[c][y][4]);
+      u64 horizontal = f64_add(f64_from_f32(p[c][y][3]),
+                               f64_from_f32(p[c][y][5]));
       horizontal = f64_add(horizontal, center);
       horizontal = f64_add(horizontal, center);
       rows[r] = horizontal;
@@ -571,6 +584,94 @@ inline void rgb_unscaled_averages(thread const float (*p)[9][3],
     total = f64_add(total, rows[2]);
     q[0][c] = ql[0];
     q[1][c] = ql[1];
+    q[2][c] = f64_mul(total, F64C_COEFF16);
+  }
+}
+
+inline float load_wrgb_patch_value(device const float* wrgb,
+                                   device const float* working, int H, int W,
+                                   float score_floor, int cy, int cx, int c,
+                                   int py, int px) {
+  return load_wrgb_hist(wrgb, working, H, W, score_floor, cy + py - 4,
+                        cx + px - 4, c);
+}
+
+// Production RGB averages read the 69-cell support directly.  This preserves
+// the exact soft-binary64 operation order and float32 scratch boundaries while
+// avoiding a 3x9x9 private patch per selected thread.
+inline void rgb_unscaled_averages_at(device const float* wrgb,
+                                     device const float* working, int H, int W,
+                                     float score_floor, int cy, int cx,
+                                     thread u64 (*q)[3]) {
+  for (int c = 0; c < 3; ++c) {
+    float s3[9], s5[9], s7[9], s9[9];
+    float center3[3][3];
+    for (int px = 0; px < 9; ++px) {
+      float v3 = load_wrgb_patch_value(
+          wrgb, working, H, W, score_floor, cy, cx, c, 3, px);
+      float v4 = load_wrgb_patch_value(
+          wrgb, working, H, W, score_floor, cy, cx, c, 4, px);
+      float v5 = load_wrgb_patch_value(
+          wrgb, working, H, W, score_floor, cy, cx, c, 5, px);
+      if (px >= 3 && px <= 5) {
+        center3[0][px - 3] = v3;
+        center3[1][px - 3] = v4;
+        center3[2][px - 3] = v5;
+      }
+      u64 acc = f64_add(f64_from_f32(v3), f64_from_f32(v4));
+      acc = f64_add(acc, f64_from_f32(v5));
+      if (px == 2 || px == 6) s3[px] = f32_from_f64(acc);
+      acc = f64_add(
+          acc, f64_from_f32(load_wrgb_patch_value(
+                   wrgb, working, H, W, score_floor, cy, cx, c, 2, px)));
+      acc = f64_add(
+          acc, f64_from_f32(load_wrgb_patch_value(
+                   wrgb, working, H, W, score_floor, cy, cx, c, 6, px)));
+      if (px == 0 || (px >= 3 && px <= 5) || px == 8)
+        s5[px] = f32_from_f64(acc);
+      if (px >= 1 && px <= 7) {
+        acc = f64_add(
+            acc, f64_from_f32(load_wrgb_patch_value(
+                     wrgb, working, H, W, score_floor, cy, cx, c, 1, px)));
+        acc = f64_add(
+            acc, f64_from_f32(load_wrgb_patch_value(
+                     wrgb, working, H, W, score_floor, cy, cx, c, 7, px)));
+        if (px == 1 || px == 7) s7[px] = f32_from_f64(acc);
+      }
+      if (px >= 2 && px <= 6) {
+        acc = f64_add(
+            acc, f64_from_f32(load_wrgb_patch_value(
+                     wrgb, working, H, W, score_floor, cy, cx, c, 0, px)));
+        acc = f64_add(
+            acc, f64_from_f32(load_wrgb_patch_value(
+                     wrgb, working, H, W, score_floor, cy, cx, c, 8, px)));
+        s9[px] = f32_from_f64(acc);
+      }
+    }
+    u64 t21 = f64_add(f64_from_f32(s3[6]), f64_from_f32(s3[2]));
+    t21 = f64_add(t21, f64_from_f32(s5[3]));
+    t21 = f64_add(t21, f64_from_f32(s5[4]));
+    t21 = f64_add(t21, f64_from_f32(s5[5]));
+    u64 t69 = f64_add(f64_from_f32(s5[8]), f64_from_f32(s5[0]));
+    t69 = f64_add(t69, f64_from_f32(s7[1]));
+    t69 = f64_add(t69, f64_from_f32(s7[7]));
+    for (int px = 2; px < 7; ++px)
+      t69 = f64_add(t69, f64_from_f32(s9[px]));
+
+    u64 rows[3];
+    for (int r = 0; r < 3; ++r) {
+      u64 center = f64_from_f32(center3[r][1]);
+      u64 horizontal = f64_add(f64_from_f32(center3[r][0]),
+                               f64_from_f32(center3[r][2]));
+      horizontal = f64_add(horizontal, center);
+      horizontal = f64_add(horizontal, center);
+      rows[r] = horizontal;
+    }
+    u64 total = f64_add(rows[0], rows[1]);
+    total = f64_add(total, rows[1]);
+    total = f64_add(total, rows[2]);
+    q[0][c] = f64_mul(t69, F64C_COEFF69);
+    q[1][c] = f64_mul(t21, F64C_COEFF21);
     q[2][c] = f64_mul(total, F64C_COEFF16);
   }
 }
@@ -587,7 +688,9 @@ inline void feature_record_at(device const float* score,
                               thread float* f_out) {
   float score_patch[9][9], waux_patch[9][9];
   for (int dy = -4; dy <= 4; ++dy) {
-    for (int dx = -4; dx <= 4; ++dx) {
+    int ady = dy < 0 ? -dy : dy;
+    int x_radius = ady == 4 ? 2 : (ady == 3 ? 3 : 4);
+    for (int dx = -x_radius; dx <= x_radius; ++dx) {
       score_patch[dy + 4][dx + 4] =
           load_score_hist(score, H, W, score_floor, cy + dy, cx + dx);
       waux_patch[dy + 4][dx + 4] =
@@ -818,9 +921,8 @@ kernel void k_features_and_combine(
     device const float* configured_strengths [[buffer(14)]],
     device u8* attempted [[buffer(15)]],
     device u64* candidate [[buffer(16)]],
-    device float* original [[buffer(17)]],
-    constant int* iparams [[buffer(18)]],
-    constant float* fparams [[buffer(19)]],
+    constant int* iparams [[buffer(17)]],
+    constant float* fparams [[buffer(18)]],
     uint gid [[thread_position_in_grid]]) {
   long selected_count = (long)iparams[0];
   int H = iparams[1];
@@ -836,18 +938,15 @@ kernel void k_features_and_combine(
 
   float source_rgb[3];
   for (int c = 0; c < 3; ++c) source_rgb[c] = working[pixel * 4 + c];
-  original[i * 3 + 0] = source_rgb[0];
-  original[i * 3 + 1] = source_rgb[1];
-  original[i * 3 + 2] = source_rgb[2];
   candidate[i * 3 + 0] = F64_ZERO;
   candidate[i * 3 + 1] = F64_ZERO;
   candidate[i * 3 + 2] = F64_ZERO;
   attempted[i] = 0;
 
   float fallback = writer_coarse_reference[y];
-  float weights[4], features[5][4];
+  float weights[4], center_features[4];
   feature_record_at(score, waux, aux, H, W, score_floor, y, x, score[pixel],
-                    aux[pixel], fallback, weights, features[0]);
+                    aux[pixel], fallback, weights, center_features);
 
   // reconstruction.driver_forces_fallback
   bool floor_on = floor_enabled[y] != 0;
@@ -855,26 +954,39 @@ kernel void k_features_and_combine(
   if (floor_on && weights[3] >= 1.0f) return;
   attempted[i] = 1;
 
-  int record_count = 1;
+  // Accumulate each lane in the original center/left/right/up/down order,
+  // consuming one neighbor record at a time instead of keeping all five
+  // records live across the heavier RGB reconstruction below.
+  u64 range_min_raw[3], range_max_raw[3];
+  for (int t = 0; t < 3; ++t) {
+    u64 d = f64_sub(f64_from_f32(center_features[t + 1]),
+                    f64_from_f32(center_features[t]));
+    range_min_raw[t] = d;
+    range_max_raw[t] = d;
+  }
   if (cross_neighbor_mode != 0) {
-    record_count = 5;
     const int offsets[4][2] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
     for (int n = 0; n < 4; ++n) {
+      float neighbor[4];
       cross_feature_at(score, waux, aux, H, W, score_floor,
                        y + offsets[n][0], x + offsets[n][1], fallback,
-                       features[n + 1]);
+                       neighbor);
+      for (int t = 0; t < 3; ++t) {
+        u64 d = f64_sub(f64_from_f32(neighbor[t + 1]),
+                        f64_from_f32(neighbor[t]));
+        range_min_raw[t] = f64_lt(d, range_min_raw[t])
+                               ? d
+                               : range_min_raw[t];
+        range_max_raw[t] = f64_lt(range_max_raw[t], d)
+                               ? d
+                               : range_max_raw[t];
+      }
     }
   }
 
   // reconstruction.recovered_rgb_candidates with UNNORMALIZED_SUM policy
-  float wrgb_patch[9][9][3];
-  for (int dy = -4; dy <= 4; ++dy)
-    for (int dx = -4; dx <= 4; ++dx)
-      for (int c = 0; c < 3; ++c)
-        wrgb_patch[dy + 4][dx + 4][c] = load_wrgb_hist(
-            wrgb, working, H, W, score_floor, y + dy, x + dx, c);
   u64 averages[3][3];
-  rgb_unscaled_averages(wrgb_patch, averages);
+  rgb_unscaled_averages_at(wrgb, working, H, W, score_floor, y, x, averages);
   float cands[3][3];
   for (int scale_index = 0; scale_index < 3; ++scale_index) {
     float denominator = weights[scale_index];
@@ -892,17 +1004,8 @@ kernel void k_features_and_combine(
   // reconstruction.feature_band_ranges (binary64 differences, f32 extrema)
   u64 range_min[3], range_max[3];
   for (int t = 0; t < 3; ++t) {
-    u64 mn = f64_sub(f64_from_f32(features[0][t + 1]),
-                     f64_from_f32(features[0][t]));
-    u64 mx = mn;
-    for (int r = 1; r < record_count; ++r) {
-      u64 d = f64_sub(f64_from_f32(features[r][t + 1]),
-                      f64_from_f32(features[r][t]));
-      mn = f64_lt(d, mn) ? d : mn;
-      mx = f64_lt(mx, d) ? d : mx;
-    }
-    range_min[t] = f64_from_f32(f32_from_f64(mn));
-    range_max[t] = f64_from_f32(f32_from_f64(mx));
+    range_min[t] = f64_from_f32(f32_from_f64(range_min_raw[t]));
+    range_max[t] = f64_from_f32(f32_from_f64(range_max_raw[t]));
   }
 
   // reconstruction._automatic_strengths
@@ -939,7 +1042,7 @@ kernel void k_features_and_combine(
   for (int c = 0; c < 3; ++c) cand[c] = f64_from_f32(cands[0][c]);
   if (coarse_enabled != 0) {
     u64 coarse_delta = f64_sub(f64_from_f32(writer_coarse_reference[y]),
-                               f64_from_f32(features[0][0]));
+                               f64_from_f32(center_features[0]));
     for (int c = 0; c < 3; ++c)
       cand[c] = f64_add(cand[c],
                         f64_mul(f64_from_f32(coarse_slopes[c]), coarse_delta));
@@ -987,7 +1090,7 @@ kernel void k_features_and_combine(
 
 // ===========================================================================
 // stage 5 (host): the sequential conditional-dither writer chain runs on one
-// host CPU core through the compiled fast_cpu.kernels.write_band path, the
+// host CPU core through the compiled fast_cpu.kernels.write_selected path, the
 // same host writer the CUDA backend uses (cuda_backend/host_writer.py maps
 // the per-selected-site arrays onto it).  dither_delta stays here, unused by
 // any pipeline kernel, as the validated primitive the Level 1 tests still
@@ -1034,25 +1137,11 @@ inline u16 emit_one(float value, device const u32* factor_high,
   return (u16)((product >> 20) - 1ul);
 }
 
-// iparams: 0 total
-kernel void k_copy_visible(
-    device const float* working [[buffer(0)]],
-    device float* work_output [[buffer(1)]],
-    constant int* iparams [[buffer(2)]],
-    uint gid [[thread_position_in_grid]]) {
-  long total = (long)iparams[0];
-  long idx = (long)gid;
-  if (idx >= total) return;
-  work_output[idx * 3 + 0] = working[idx * 4 + 0];
-  work_output[idx * 3 + 1] = working[idx * 4 + 1];
-  work_output[idx * 3 + 2] = working[idx * 4 + 2];
-}
-
 // iparams: 0 selected_count
-kernel void k_scatter_values(
+kernel void k_scatter_values_inplace(
     device const long* selected [[buffer(0)]],
     device const float* values [[buffer(1)]],
-    device float* work_output [[buffer(2)]],
+    device float* working [[buffer(2)]],
     device atomic_uint* error_flags [[buffer(3)]],
     constant int* iparams [[buffer(4)]],
     uint gid [[thread_position_in_grid]]) {
@@ -1067,22 +1156,24 @@ kernel void k_scatter_values(
     if (!isfinite(value)) {
       atomic_fetch_or_explicit(&error_flags[0], 2u, memory_order_relaxed);
     }
-    work_output[pixel * 3 + c] = value;
+    working[pixel * 4 + c] = value;
   }
 }
 
-// iparams: 0 total3 (H * W * 3)
-kernel void k_emit_rgb16(
-    device const float* work_output [[buffer(0)]],
+// iparams: 0 total pixels; grid: (total, 3 visible channels)
+kernel void k_emit_working_rgb16(
+    device const float* working [[buffer(0)]],
     device const u32* factor_high [[buffer(1)]],
     device const u32* factor_low [[buffer(2)]],
     device u16* out [[buffer(3)]],
     constant int* iparams [[buffer(4)]],
-    uint gid [[thread_position_in_grid]]) {
+    uint2 gid [[thread_position_in_grid]]) {
   long total = (long)iparams[0];
-  long idx = (long)gid;
-  if (idx >= total) return;
-  out[idx] = emit_one(work_output[idx], factor_high, factor_low);
+  long pixel = (long)gid.x;
+  int c = (int)gid.y;
+  if (pixel >= total || c >= 3) return;
+  out[pixel * 3 + c] =
+      emit_one(working[pixel * 4 + c], factor_high, factor_low);
 }
 
 // per-attempted-site changed-pixel accounting against the no-op emit
@@ -1091,16 +1182,20 @@ kernel void k_emit_rgb16(
 kernel void k_site_counters(
     device const u8* attempted [[buffer(0)]],
     device const float* values [[buffer(1)]],
-    device const float* original [[buffer(2)]],
+    device const long* selected [[buffer(2)]],
     device const u8* written [[buffer(3)]],
     device const u32* factor_high [[buffer(4)]],
     device const u32* factor_low [[buffer(5)]],
     device atomic_uint* counters [[buffer(6)]],
     constant int* iparams [[buffer(7)]],
+    device const float* working [[buffer(8)]],
+    device u8* changed_mask [[buffer(9)]],
     uint gid [[thread_position_in_grid]]) {
   long selected_count = (long)iparams[0];
   long i = (long)gid;
   if (i >= selected_count) return;
+  long pixel = selected[i];
+  changed_mask[pixel] = 0;
   if (attempted[i] == 0) return;
   atomic_fetch_add_explicit(&counters[0], 1u, memory_order_relaxed);
   if (written[i] != 0) {
@@ -1109,11 +1204,12 @@ kernel void k_site_counters(
   bool changed = false;
   for (int c = 0; c < 3; ++c) {
     u16 rendered = emit_one(values[i * 3 + c], factor_high, factor_low);
-    u16 noop = emit_one(original[i * 3 + c], factor_high, factor_low);
+    u16 noop = emit_one(working[pixel * 4 + c], factor_high, factor_low);
     changed = changed || (rendered != noop);
   }
   if (changed) {
     atomic_fetch_add_explicit(&counters[2], 1u, memory_order_relaxed);
+    changed_mask[pixel] = 1;
   }
 }
 
@@ -1337,9 +1433,8 @@ KERNEL_NAMES = (
     "k_score_and_weighted",
     "k_decision_eligibility",
     "k_features_and_combine",
-    "k_copy_visible",
-    "k_scatter_values",
-    "k_emit_rgb16",
+    "k_scatter_values_inplace",
+    "k_emit_working_rgb16",
     "k_site_counters",
     "k_producer_failpos",
     "k_producer_row_sums",

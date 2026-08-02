@@ -68,8 +68,8 @@ def _job(main: np.ndarray, prepass: np.ndarray, frame_id: str) -> ProcessingJob:
 def _assert_job_parity(main: np.ndarray, prepass: np.ndarray, frame_id: str) -> None:
     from portable_digital_ice.metal_backend import process_metal
 
-    cpu = process_cpu(_job(main, prepass, frame_id))
-    gpu = process_metal(_job(main, prepass, frame_id))
+    cpu = process_cpu(_job(main, prepass, frame_id), export_diagnostics=True)
+    gpu = process_metal(_job(main, prepass, frame_id), export_diagnostics=True)
     assert gpu.replay.output_sha256 == cpu.replay.output_sha256, frame_id
     assert np.array_equal(gpu.output_rgb16, cpu.output_rgb16), frame_id
     assert gpu.replay.attempted_pixels == cpu.replay.attempted_pixels, frame_id
@@ -78,6 +78,21 @@ def _assert_job_parity(main: np.ndarray, prepass: np.ndarray, frame_id: str) -> 
     assert gpu.replay.final_rng_state == cpu.replay.final_rng_state, frame_id
     assert gpu.replay.changed_pixels == cpu.replay.changed_pixels, frame_id
     assert gpu.replay.startup == cpu.replay.startup, frame_id
+    assert cpu.diagnostics is not None
+    assert gpu.diagnostics is not None
+    np.testing.assert_array_equal(
+        gpu.diagnostics.score_plane, cpu.diagnostics.score_plane
+    )
+    np.testing.assert_array_equal(
+        gpu.diagnostics.at_floor_mask, cpu.diagnostics.at_floor_mask
+    )
+    np.testing.assert_array_equal(
+        gpu.diagnostics.changed_mask, cpu.diagnostics.changed_mask
+    )
+    assert (
+        int(np.count_nonzero(gpu.diagnostics.changed_mask))
+        == gpu.replay.changed_pixels
+    )
 
     repeat = process_metal(_job(main, prepass, frame_id))
     assert repeat.replay.output_sha256 == gpu.replay.output_sha256, frame_id
@@ -168,10 +183,23 @@ def test_adversarial_tiles_match_cpu(case: str) -> None:
     _assert_job_parity(main, _prepass(rng), f"tile-{case}")
 
 
-def test_metric_500_center_only_streaming_parity() -> None:
+def test_metric_500_center_only_streaming_parity(monkeypatch) -> None:
     """Exercise the CENTER_ONLY feature-band mode shared with metric 500."""
 
     _require_device()
+    from portable_digital_ice.metal_backend import engine as metal_engine
+
+    compiled_startup_calls = 0
+    compiled_startup = metal_engine._startup_replay_fast
+
+    def counted_compiled_startup(*args, **kwargs):
+        nonlocal compiled_startup_calls
+        compiled_startup_calls += 1
+        return compiled_startup(*args, **kwargs)
+
+    monkeypatch.setattr(
+        metal_engine, "_startup_replay_fast", counted_compiled_startup
+    )
     rng = np.random.default_rng(500500)
     height, width = 26, 48
     pixels = rng.integers(15000, 64000, size=(height, width, 4), dtype=np.uint16)
@@ -241,6 +269,7 @@ def test_metric_500_center_only_streaming_parity() -> None:
     )
     assert np.array_equal(gpu_output, cpu_output)
     assert gpu_replay == cpu_replay
+    assert compiled_startup_calls == 1
 
 
 def test_writer_gate_and_row_gate_branches() -> None:
