@@ -427,6 +427,41 @@ def test_multi_band_frame_matches_cpu() -> None:
     _assert_job_parity(main, _prepass(rng), "multi-band", export_diagnostics=True)
 
 
+def test_multi_band_progress_failure_joins_analysis_worker(monkeypatch) -> None:
+    """A callback failure must join the already-submitted next-band analysis."""
+
+    from portable_digital_ice.engine import ProcessingPhase
+    from portable_digital_ice.fast_cpu import engine as fast_engine
+
+    real_executor = fast_engine.ThreadPoolExecutor
+    shutdown_calls: list[tuple[bool, bool]] = []
+
+    class RecordingExecutor(real_executor):
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            shutdown_calls.append((wait, cancel_futures))
+            return super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(fast_engine, "ThreadPoolExecutor", RecordingExecutor)
+
+    rng = np.random.default_rng(20260801)
+    height, width = 300, 16
+    main = rng.integers(18000, 62000, size=(height, width, 4), dtype=np.uint16)
+    main[120:136, 4:12, 3] = 600
+    job = _job(main, _prepass(rng), "progress-failure-cleanup")
+
+    def fail_after_first_reconstruction_row(update) -> None:
+        if (
+            update.phase is ProcessingPhase.RECONSTRUCTION
+            and update.completed == 1
+        ):
+            raise RuntimeError("progress callback failed")
+
+    with pytest.raises(RuntimeError, match="progress callback failed"):
+        process_cpu_fast(job, progress=fail_after_first_reconstruction_row)
+
+    assert shutdown_calls == [(True, True)]
+
+
 def test_thread_count_determinism() -> None:
     """Outputs, digests, and counters are byte-equal for every thread count.
 
