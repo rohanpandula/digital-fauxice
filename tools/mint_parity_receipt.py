@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import os
 import platform
@@ -317,20 +318,37 @@ def _counters(result: Any) -> dict[str, Any]:
 
 
 def _import_package() -> Any:
-    """Import the package under test, preferring an installed copy."""
+    """Import and verify the package from this repository's ``src`` tree."""
 
-    try:
-        import portable_digital_ice  # noqa: F401
-    except ImportError:
-        source = REPOSITORY_ROOT / "src"
-        if not source.is_dir():
-            raise GateFailure(
-                "portable_digital_ice is not importable and "
-                f"{source} does not exist; install the package first"
-            )
-        sys.path.insert(0, str(source))
-    import portable_digital_ice as package
+    source = (REPOSITORY_ROOT / "src").resolve()
+    expected_init = (source / "portable_digital_ice" / "__init__.py").resolve()
+    if not expected_init.is_file():
+        raise GateFailure(f"package source does not exist: {expected_init}")
 
+    existing = sys.modules.get("portable_digital_ice")
+    existing_file = getattr(existing, "__file__", None)
+    if existing is not None and existing_file is not None:
+        if Path(existing_file).resolve() == expected_init:
+            return existing
+
+    # A stale wheel or another checkout may already be imported. Remove the
+    # complete package namespace, put this repository first, and import again.
+    # The post-import path check is the fail-closed proof that the source
+    # manifest below describes the code that actually executed the gate.
+    for name in tuple(sys.modules):
+        if name == "portable_digital_ice" or name.startswith(
+            "portable_digital_ice."
+        ):
+            del sys.modules[name]
+    sys.path.insert(0, str(source))
+    importlib.invalidate_caches()
+    package = importlib.import_module("portable_digital_ice")
+    loaded_file = getattr(package, "__file__", None)
+    if loaded_file is None or Path(loaded_file).resolve() != expected_init:
+        raise GateFailure(
+            "receipt gate imported portable_digital_ice from outside this "
+            "repository's src tree"
+        )
     return package
 
 
@@ -411,6 +429,7 @@ def run_gate(
         raise GateFailure(f"fixture pair is not self-consistent: {checks}")
 
     package = _import_package()
+    package_init = Path(package.__file__).resolve()
     main_pixels = main_input.logical_pixels_mmap()
     prepass_pixels = prepass_input.logical_pixels(variant_name)
     main_raw_sha256 = sha256_rgbi16(main_pixels)
@@ -599,6 +618,10 @@ def run_gate(
         "minted_by": {
             "tool": "tools/mint_parity_receipt.py",
             "files": _tool_manifest(),
+            "package_under_test": {
+                "source": "src/portable_digital_ice/__init__.py",
+                "sha256": sha256_file(package_init),
+            },
             "baseline_backend": baseline,
             "baseline_selection_reason": baseline_selection.reason,
             "candidate_selection_reason": (

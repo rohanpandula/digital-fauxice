@@ -25,6 +25,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -50,6 +51,45 @@ def _load(name: str):
 
 fixture_format = _load("dice_fixture_format")
 mint = _load("mint_parity_receipt")
+
+
+def test_receipt_import_replaces_a_stale_installed_package(tmp_path: Path) -> None:
+    """The gate must execute the same checkout whose source manifest it binds."""
+
+    fake_root = tmp_path / "fake-install"
+    fake_package = fake_root / "portable_digital_ice"
+    fake_package.mkdir(parents=True)
+    (fake_package / "__init__.py").write_text(
+        "SOURCE = 'stale-installed-copy'\n", encoding="utf-8"
+    )
+    script = f"""
+import importlib.util
+import pathlib
+import sys
+
+sys.path.insert(0, {str(fake_root)!r})
+import portable_digital_ice
+assert portable_digital_ice.SOURCE == 'stale-installed-copy'
+
+spec = importlib.util.spec_from_file_location(
+    'receipt_mint_isolated', {str(TOOLS / 'mint_parity_receipt.py')!r}
+)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+package = module._import_package()
+print(pathlib.Path(package.__file__).resolve())
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert Path(completed.stdout.strip()) == (
+        REPOSITORY_ROOT / "src" / "portable_digital_ice" / "__init__.py"
+    ).resolve()
 
 
 # --------------------------------------------------------------------------
@@ -492,7 +532,7 @@ def test_source_manifest_recipe_matches_the_pinned_scope() -> None:
 
     pinned = json.loads(
         (EVIDENCE / "metal-frame1-parity.json").read_text(encoding="utf-8")
-    )["reverified_after_session_leak_fix"]
+    )
     if mint._manifest_hash(manifest) != pinned["source_manifest_sha256"]:
         pytest.skip(
             "package sources have changed since the receipts were last "

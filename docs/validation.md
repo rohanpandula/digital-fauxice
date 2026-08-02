@@ -155,14 +155,14 @@ either way, and what binds it to the CPU reference is the
 `candidate_matches_pinned_cpu_reference_output` gate check, not the key
 name.
 
-Verified 2026-07-26 on the arm64 validation host (Apple M4, macOS 26.5.2,
+Verified again 2026-08-01 on the arm64 validation host (Apple M4, macOS 26.5.2,
 Python 3.13.5, numpy 2.4.6, numba 0.66.0, pyobjc 12.2.1): `--backend metal`
 re-mints both `metal-frame1-parity.json` and `metal-frame2-parity.json` with
 all 19 comparable binding fields identical and 28 of 28 named gate checks
-passing, and its `source_manifest_sha256` equals the 31-file value those
-receipts record in their re-verification block.
+passing. The refreshed receipts record the current 31-file source manifest
+directly in their top-level `source_manifest_sha256` field.
 
-The same day, `--backend cpu-fast --baseline cpu` re-minted
+On 2026-07-26, `--backend cpu-fast --baseline cpu` re-minted
 `cpu-fast-frame-1-parity.json` against the exact CPU reference, 28 of 28
 checks, with all 15 comparable binding fields identical; the four fields that
 receipt predates were reported as not compared rather than counted as
@@ -172,8 +172,8 @@ reference itself re-deriving `c3ee49f4…6ad7` on the same host, so the chain
 no longer rests only on the earlier receipts. It took 2,537.8 seconds
 against the compiled backend's 10.0.
 
-`--backend cuda` re-minted `cuda-frame-1-parity.json` and
-`cuda-frame-2-parity.json` the same day on the recorded validation host
+Also on 2026-07-26, `--backend cuda` re-minted
+`cuda-frame-1-parity.json` and `cuda-frame-2-parity.json` on the recorded validation host
 (RTX A4000, driver 610.43.02, the `nvidia/cuda:12.6.3-devel-ubuntu24.04`
 container, Python 3.12.3, numpy 2.4.6, CuPy 14.1.1), 28 of 28 checks each,
 with all 16 comparable binding fields identical. Warm CUDA wall time was
@@ -184,8 +184,11 @@ reported as not compared. Both were re-minted against the compiled
 CPU reference is the `candidate_matches_pinned_cpu_reference_output` check,
 which passed in every case.
 
-Every complete-frame receipt under `evidence/` has now been regenerated from
-its fixtures and matched against its checked-in values.
+Every historical complete-frame receipt under `evidence/` was regenerated from
+its fixture on 2026-07-26 and matched against its checked-in binding values.
+The refreshed 2026-08-01 Metal receipts additionally bind the current source
+manifest. The current compact-writer CUDA tree still requires a full-frame
+re-mint on the NVIDIA validation lane.
 
 ### Why this script exists
 
@@ -196,8 +199,8 @@ gap. It lives in the repository, is covered by tests, and records its own
 SHA-256 in every receipt it mints under `minted_by`.
 
 The cost of that history shows up in the source manifests the Metal receipts
-pin. The 31-file value in their re-verification block is reproducible: it is
-a SHA-256 over the compact sorted JSON mapping each
+pin. The current 31-file top-level `source_manifest_sha256` value is
+reproducible: it is a SHA-256 over the compact sorted JSON mapping each
 `src/portable_digital_ice/**/*.py` path to its file hash, and
 `tools/mint_parity_receipt.py` recomputes it exactly. The original 32-file
 value is not. No combination of the candidate tree states (the commit that

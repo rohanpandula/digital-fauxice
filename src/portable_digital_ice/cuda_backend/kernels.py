@@ -504,7 +504,7 @@ extern "C" __global__ void k_features_and_combine(
 
 // ---------------------------------------------------------------------------
 // stage 5 (host): the sequential conditional-dither writer chain now runs on
-// one host CPU core through the compiled fast_cpu.kernels.write_band path
+// one host CPU core through the compiled fast_cpu.kernels.write_selected path
 // (cuda_backend/host_writer.py) -- it was sequential by necessity (draw
 // consumption depends on drawn values) and a single device thread paid an
 // order of magnitude more wall time for the same schedule than one host

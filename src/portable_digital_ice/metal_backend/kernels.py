@@ -1090,7 +1090,7 @@ kernel void k_features_and_combine(
 
 // ===========================================================================
 // stage 5 (host): the sequential conditional-dither writer chain runs on one
-// host CPU core through the compiled fast_cpu.kernels.write_band path, the
+// host CPU core through the compiled fast_cpu.kernels.write_selected path, the
 // same host writer the CUDA backend uses (cuda_backend/host_writer.py maps
 // the per-selected-site arrays onto it).  dither_delta stays here, unused by
 // any pipeline kernel, as the validated primitive the Level 1 tests still

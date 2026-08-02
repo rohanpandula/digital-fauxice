@@ -6,7 +6,7 @@ ICE Normal, internal metric 4000. The exact label rests on receipts, not on
 availability or speed: complete output, including every RGB16 byte, the
 changed-pixel accounting, the number of public RNG advances, the final RNG
 state, the per-stage hidden-startup RNG advances, and all three diagnostics
-planes, compared bitwise on both complete validation frames, 26 binding
+planes, compared bitwise on both complete validation frames, 28 named gate
 checks per frame. The receipts are checked in under
 [`evidence/`](../evidence/) (`metal-frame-*-parity.json`) and bind this
 tree's current source manifest.
@@ -14,11 +14,9 @@ tree's current source manifest.
 The full-frame comparison baseline is the compiled `cpu-fast` backend run in
 the same process, chained to the CPU reference by pinned hashes: the Metal
 output hash equals the CPU-reference output hash recorded by the checked-in
-cuda and cpu-fast receipts for the same fixture bytes, and the output plus
-all three diagnostics planes also match the archived full-frame export of
-the completed CUDA gate bitwise. The synthetic startup self-test additionally
-proves direct byte parity against `process_cpu` on every machine, every
-process, before the backend accepts any real frame.
+cuda and cpu-fast receipts for the same fixture bytes. The synthetic startup
+self-test additionally proves direct byte parity against `process_cpu` on
+every machine, every process, before the backend accepts any real frame.
 
 ## Install
 
@@ -110,8 +108,8 @@ The rest of the design mirrors the CUDA backend:
   accumulation on the host; the GPU computes only the row-internal and
   epoch-internal sums, in the exact reference order, returning binary64
   bit patterns;
-- the six-stage hidden startup replay stays on the CPU reference code and
-  seeds the RNG chain;
+- the six-stage hidden startup replay uses the byte-exact compiled `cpu-fast`
+  mirror and seeds the RNG chain in the same order;
 - the library is compiled with fast math disabled (and `MTLMathModeSafe`
   where the OS provides it), governing the comparison predicates and raw
   loads that remain native.
@@ -128,28 +126,29 @@ anywhere.
 
 ## Performance
 
-Measured on an Apple M4 (10-core GPU, 16 GB unified memory, macOS 26.5,
+Measured on an Apple M4 (10-core GPU, 16 GB unified memory, macOS 26.5.2,
 Python 3.13.5, numpy 2.4.6, numba 0.66.0, pyobjc 12.2.1), complete
-5,782 x 3,946 native frame, warm process, diagnostics export enabled, while
-other sessions loaded the machine (1-minute load average about 11; byte
-equality is load-independent, wall time is not):
+5,782 x 3,946 native frame with diagnostics export enabled. The first Metal
+candidate in each receipt includes one-time process warm-up; the second is the
+warm run. Machine load can move wall time, but not byte equality:
 
 | Metric | Frame 1 | Frame 2 |
 |---|---:|---:|
-| Full frame wall time (2 runs each) | 8.2 - 9.9 s | 8.6 - 8.7 s |
-| cpu-fast on the same frames, same session | 14.0 s | 14.8 s |
+| Metal candidate run 1 / run 2 | 4.627 / 2.690 s | 4.267 / 2.975 s |
+| cpu-fast baseline, same receipt run | 8.649 s | 10.439 s |
 | Reference CPU wall time, same frame | 3,545.7 s | 4,183.4 s |
-| Speedup vs reference | about 400x | about 480x |
+| Warm speedup vs reference | about 1,320x | about 1,410x |
 | Repeated-run output hash | identical (deterministic) | identical (deterministic) |
 
-Stage breakdown of a representative frame-1 run: feature records,
-candidates, and combiner on device 1.9 s; host writer chain 1.5 s; hidden
-startup replay (reference Python) 2.6 - 3.9 s; diagnostics export 1.3 s;
-analysis planes on device 0.2 - 0.4 s; producer 0.3 s; everything else
-under 0.3 s combined. The softfloat features kernel carries roughly two
-thousand software binary64 operations per selected site and still clears
-the frame's roughly seven million sites in about two seconds; the
-next-largest costs are host-side and shared with the other backends.
+Separate controlled warm replay measured 2.25 - 2.34 s, down from 5.15 s
+before the optimization; a thermally loaded run measured 2.93 s. Across those
+optimized runs, the compiled hidden-startup replay takes about 0.007 s; feature
+records, candidates, and combiner take about 1.27 - 1.63 s; the compact
+selected-site writer takes about 0.36 - 0.45 s; and diagnostics export takes
+about 0.02 - 0.08 s. The softfloat features kernel remains the largest single
+stage: it carries roughly two thousand software binary64 operations per
+selected site and clears the frame's roughly seven million sites in well under
+two seconds.
 One warm frame run with diagnostics measured a peak memory footprint of
 about 4.3 GB (peak resident set 2.8 GB); unified memory makes the device
 planes and the host writer views the same bytes, so nothing crosses a bus
@@ -172,8 +171,8 @@ output buffer is written only once, after all device work completes.
 - Backend contract (fail-closed legs, self-test caching, tampered-result
   detection, AUTO reasons): passed.
 - Complete-frame gates (both validation frames vs `cpu-fast` in-process,
-  bound to the pinned CPU-reference hashes and the archived CUDA-gate
-  export): 26/26 checks per frame, receipts under `evidence/`.
+  bound to the pinned CPU-reference hashes): 28/28 checks per frame,
+  receipts under `evidence/`.
 
 The synthetic suites run wherever a Metal device is present and skip with a
 reason elsewhere; continuous integration does not currently exercise a
@@ -181,7 +180,7 @@ Metal device, so the receipts above are the arm64 validation host's.
 
 Both complete-frame receipts are regenerable. `tools/mint_parity_receipt.py`
 re-mints them from the private fixtures and compares the result against the
-checked-in file; re-run on 2026-07-26 it reproduced every binding field of
+checked-in file; re-run on 2026-08-01 it reproduced every binding field of
 `metal-frame1-parity.json` and `metal-frame2-parity.json` exactly — output
 hash, all four pixel counters, both RNG figures, the startup receipt, and
 both raw RGBI16 input hashes. See
