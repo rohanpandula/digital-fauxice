@@ -193,15 +193,16 @@ def _source_manifest(root: Path) -> dict[str, str]:
     """Hash every runtime source file, the scope the receipts pin.
 
     ``src/portable_digital_ice/**/*.py`` -- 31 files at the time of writing,
-    reproducing the ``source_manifest_sha256`` recorded in the checked-in
-    Metal receipts' re-verification block.
+    reproducing the top-level ``source_manifest_sha256`` recorded in the
+    checked-in Metal receipts. Keys are POSIX paths on every host so the
+    manifest hash is platform-independent.
     """
 
     sources = sorted((root / "src" / "portable_digital_ice").rglob("*.py"))
     if not sources:
         raise GateFailure(f"no package sources found under {root}")
     return {
-        str(path.relative_to(root)): sha256_file(path)
+        path.relative_to(root).as_posix(): sha256_file(path)
         for path in sources
         if path.is_file()
     }

@@ -134,10 +134,10 @@ warm run. Machine load can move wall time, but not byte equality:
 
 | Metric | Frame 1 | Frame 2 |
 |---|---:|---:|
-| Metal candidate run 1 / run 2 | 4.627 / 2.690 s | 4.267 / 2.975 s |
-| cpu-fast baseline, same receipt run | 8.649 s | 10.439 s |
+| Metal candidate run 1 / run 2 | 4.546 / 2.438 s | 4.418 / 2.355 s |
+| cpu-fast baseline, same receipt run | 12.486 s | 13.918 s |
 | Reference CPU wall time, same frame | 3,545.7 s | 4,183.4 s |
-| Warm speedup vs reference | about 1,320x | about 1,410x |
+| Warm speedup vs reference | about 1,450x | about 1,780x |
 | Repeated-run output hash | identical (deterministic) | identical (deterministic) |
 
 Separate controlled warm replay measured 2.25 - 2.34 s, down from 5.15 s

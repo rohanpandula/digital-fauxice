@@ -58,7 +58,7 @@
     "candidate_selection_reason": "explicit Metal request; self-test passed",
     "files": {
       "tools/dice_fixture_format.py": "6b00e440e33600cc794f5814e4c7bf56392110d3ed814082055537bb30d028a9",
-      "tools/mint_parity_receipt.py": "1507a00edf9e58e478a36b7166a7160263382d99417f338c73c4f3f3c5c0549a"
+      "tools/mint_parity_receipt.py": "fb4d65c604c3be602aa2d72b0a39b42b50fb49e01770a85be173b2e109ad90e4"
     },
     "package_under_test": {
       "sha256": "95640f42b4f7add9d29fc1b1c59b8d32a63c4dcaca1bf8c098e49d72e7347eaa",
@@ -73,11 +73,11 @@
   "prepass_rgbi16_raw_byte_sha256": "3b5a091ccad3f9f783b0e8bb78221d49b1b77bad55feaa66d88cd240cb35b2db",
   "public_rng_advances": 34596507,
   "runtime": {
-    "cpu_fast_elapsed_seconds": 8.649,
+    "cpu_fast_elapsed_seconds": 12.486,
     "machine": "arm64",
     "metal_elapsed_seconds_per_run": [
-      4.627,
-      2.69
+      4.546,
+      2.438
     ],
     "numpy": "2.4.6",
     "os": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
